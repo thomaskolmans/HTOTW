@@ -1,5 +1,22 @@
-/target
+# Rust build artifacts
+/target/
 **/*.rs.bk
-Cargo.lock
+*.pdb
+
+# Note: Cargo.lock IS committed. This crate produces a binary (`simctl`), and the
+# convention for applications is to commit the lockfile for reproducible builds.
+# (The core is dependency-free, so the lockfile is trivial — but kept for habit.)
+
+# Generated output (CSV traces from `simctl trace`, etc.)
 *.csv
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS noise
 .DS_Store
+Thumbs.db
