@@ -1,0 +1,24 @@
+[package]
+name = "society-sim"
+version = "0.1.0"
+edition = "2021"
+authors = ["Thomas Kolmans <thomas.kolmans@n0name.eu>"]
+description = "A system-dynamics simulator for exploring how to organise society: stack parameterised policies and observe their effects on humans, animals, the environment, the economy, and the planet over time."
+license = "MIT"
+repository = "https://github.com/n0name/htotw"
+readme = "README.md"
+
+[lib]
+name = "society_sim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "simctl"
+path = "src/bin/simctl.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Core is intentionally dependency-free for robustness and fast, reproducible builds.
+[dependencies]
