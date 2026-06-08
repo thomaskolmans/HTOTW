@@ -69,6 +69,31 @@ simctl list                                                # presets / scenarios
 
 Agent-engine presets for `render`/`trace`: `demo`, `fragile-commons`, `warming-world`.
 
+### Interactive visualizer (`simviz`) — runs in your browser, on any OS
+
+```sh
+cargo run --bin simviz          # opens http://127.0.0.1:8080 in your browser
+cargo run --bin simviz -- --port 9000 --no-open
+```
+
+`simviz` runs the engine **natively** (full speed) and serves a self-contained
+interactive UI to your **browser**, so it works identically on Linux, Windows and
+macOS with nothing to install. It's **dependency-free** — a tiny std-only HTTP
+server plus an embedded HTML/Canvas page. You get:
+
+- a live **landscape map** (good 0 = red, good 1 = green, agents as dots that
+  brighten with wealth),
+- **play / pause / step** and a speed control,
+- a **preset** picker (`demo` / `fragile-commons` / `warming-world`), a seed, and
+  sliders for key **primitives** (agent count, resource capacity, regrowth,
+  metabolism, birth threshold),
+- **policy-rule toggles** (harvest quota, property rights, wealth tax,
+  redistribute, decarbonize, corrupt official),
+- and **live charts** of the emergent measurements (population, Gini, wealth,
+  commons health, temperature…) responding as the society runs.
+
+Every number shown is *measured* from agent state, never set.
+
 **See a society run** (resource map + emergent series in your terminal):
 
 ```sh

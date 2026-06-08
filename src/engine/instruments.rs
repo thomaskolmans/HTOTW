@@ -359,6 +359,13 @@ mod tests {
     }
 
     #[test]
+    fn gini_degenerate_inputs() {
+        assert_eq!(gini(&[]), 0.0); // empty
+        assert_eq!(gini(&[0.0, 0.0, 0.0]), 0.0); // all-zero (sum<=0 guard)
+        assert_eq!(gini(&[5.0]), 0.0); // single value
+    }
+
+    #[test]
     fn weighted_median_picks_the_high_volume_ratio() {
         // Two cheap tiny trades, one big trade at 5.0 → median follows volume.
         let v = weighted_median(vec![(1.0, 0.1), (2.0, 0.1), (5.0, 10.0)]);

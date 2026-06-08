@@ -22,7 +22,13 @@ use society_sim::sim::{Simulation, Snapshot};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match args.first().map(String::as_str) {
+    std::process::exit(dispatch(&args));
+}
+
+/// Route a command line to the right subcommand and return its exit code.
+/// Separated from `main` so it is unit-testable (main is only the `exit` shim).
+fn dispatch(args: &[String]) -> i32 {
+    match args.first().map(String::as_str) {
         Some("run") => cmd_run(&args[1..]),
         Some("list") => cmd_list(),
         Some("calibrate") => cmd_calibrate(),
@@ -39,8 +45,7 @@ fn main() {
             print_help();
             2
         }
-    };
-    std::process::exit(code);
+    }
 }
 
 fn print_help() {
@@ -574,4 +579,138 @@ fn print_summary(history: &[Snapshot]) {
         println!("{label:<16} {a:>12.3} {b:>12.3} {arrow}");
     }
     println!("\n(^+ = better, v- = worse; scores in [0,1], wellbeing 0-10)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+    fn history(years: u32) -> Vec<Snapshot> {
+        Simulation::new(Scenario::baseline_2025()).run(years)
+    }
+    fn tmp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    #[test]
+    fn help_and_list() {
+        print_help();
+        assert_eq!(cmd_list(), 0);
+    }
+
+    #[test]
+    fn run_defaults_and_options() {
+        assert_eq!(cmd_run(&[]), 0);
+        let args = mk(&[
+            "--scenario", "baseline-2025", "--years", "3", "--government", "technocracy",
+            "--policy", "carbon-tax:param=0.5", "--policy", "education-program:start=2025,param=0.03",
+        ]);
+        assert_eq!(cmd_run(&args), 0);
+    }
+
+    #[test]
+    fn run_csv_and_bad_path() {
+        let p = tmp("simctl_run.csv");
+        assert_eq!(cmd_run(&mk(&["--years", "2", "--csv", p.to_str().unwrap()])), 0);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("year"));
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(cmd_run(&mk(&["--years", "2", "--csv", "/no/such/dir/x.csv"])), 1);
+    }
+
+    #[test]
+    fn run_arg_errors() {
+        assert_eq!(cmd_run(&mk(&["--scenario"])), 2);
+        assert_eq!(cmd_run(&mk(&["--years", "x"])), 2);
+        assert_eq!(cmd_run(&mk(&["--years"])), 2);
+        assert_eq!(cmd_run(&mk(&["--government"])), 2);
+        assert_eq!(cmd_run(&mk(&["--policy"])), 2);
+        assert_eq!(cmd_run(&mk(&["--csv"])), 2);
+        assert_eq!(cmd_run(&mk(&["--bogus"])), 2);
+        assert_eq!(cmd_run(&mk(&["--scenario", "nope"])), 2);
+        assert_eq!(cmd_run(&mk(&["--government", "nope"])), 2);
+        assert_eq!(cmd_run(&mk(&["--policy", "teleport:param=1"])), 2);
+    }
+
+    #[test]
+    fn parse_policy_paths() {
+        assert!(parse_policy("carbon-tax:start=2030,param=0.8", 2025).is_ok());
+        assert!(parse_policy("carbon-tax", 2025).is_ok());
+        assert!(parse_policy("carbon-tax:strength=0.4", 2025).is_ok());
+        assert!(parse_policy("teleport", 2025).is_err());
+        assert!(parse_policy("carbon-tax:bad", 2025).is_err());
+        assert!(parse_policy("carbon-tax:zzz=1", 2025).is_err());
+        assert!(parse_policy("carbon-tax:start=xx", 2025).is_err());
+        assert!(parse_policy("carbon-tax:param=xx", 2025).is_err());
+    }
+
+    #[test]
+    fn csv_and_summary_helpers() {
+        let h = history(3);
+        let header = csv_header();
+        assert!(header.starts_with("year,"));
+        assert_eq!(csv_row(&h[0]).split(',').count(), header.split(',').count());
+        print_summary(&h);
+        print_summary(&[]);
+        let p = tmp("simctl_wc.csv");
+        assert!(write_csv(p.to_str().unwrap(), &h).is_ok());
+        let _ = std::fs::remove_file(&p);
+        assert!(write_csv("/no/such/dir/x.csv", &h).is_err());
+        assert_eq!(arg_err("x"), 2);
+    }
+
+    #[test]
+    fn calibrate_and_experiment() {
+        assert_eq!(cmd_calibrate(), 0);
+        assert_eq!(cmd_experiment(), 0);
+    }
+
+    #[test]
+    fn viz_subcommands_and_errors() {
+        assert_eq!(cmd_trace(&mk(&["--preset", "demo", "--ticks", "5"])), 0);
+        let p = tmp("simctl_trace.csv");
+        assert_eq!(
+            cmd_trace(&mk(&["--preset", "warming-world", "--ticks", "5", "--seed", "3", "--csv", p.to_str().unwrap()])),
+            0
+        );
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(cmd_trace(&mk(&["--ticks", "3", "--csv", "/no/such/dir/x.csv"])), 1);
+        assert_eq!(cmd_render(&mk(&["--preset", "fragile-commons", "--ticks", "5"])), 0);
+        assert_eq!(cmd_trace(&mk(&["--preset"])), 2);
+        assert_eq!(cmd_trace(&mk(&["--ticks", "x"])), 2);
+        assert_eq!(cmd_trace(&mk(&["--seed", "x"])), 2);
+        assert_eq!(cmd_trace(&mk(&["--csv"])), 2);
+        assert_eq!(cmd_trace(&mk(&["--bogus"])), 2);
+        assert_eq!(cmd_trace(&mk(&["--preset", "nope"])), 2);
+        assert!(engine_preset("nope").is_none());
+        assert!(engine_preset("fragile_commons").is_some());
+        assert!(engine_preset("warming_world").is_some());
+    }
+
+    #[test]
+    fn bench_and_errors() {
+        assert_eq!(cmd_bench(&mk(&["--agents", "300", "--cells", "1600", "--ticks", "3", "--seed", "2", "--threads", "1"])), 0);
+        assert_eq!(cmd_bench(&mk(&["--agents", "200", "--ticks", "2"])), 0);
+        assert_eq!(cmd_bench(&mk(&["--agents", "x"])), 2);
+        assert_eq!(cmd_bench(&mk(&["--cells", "x"])), 2);
+        assert_eq!(cmd_bench(&mk(&["--ticks", "x"])), 2);
+        assert_eq!(cmd_bench(&mk(&["--seed", "x"])), 2);
+        assert_eq!(cmd_bench(&mk(&["--threads", "x"])), 2);
+        assert_eq!(cmd_bench(&mk(&["--agents"])), 2);
+        assert_eq!(cmd_bench(&mk(&["--bogus"])), 2);
+    }
+
+    #[test]
+    fn dispatch_routes_commands() {
+        assert_eq!(dispatch(&[]), 0); // none -> help
+        assert_eq!(dispatch(&mk(&["help"])), 0);
+        assert_eq!(dispatch(&mk(&["list"])), 0);
+        assert_eq!(dispatch(&mk(&["bogus"])), 2);
+        assert_eq!(dispatch(&mk(&["run", "--years", "2"])), 0);
+        assert_eq!(dispatch(&mk(&["trace", "--ticks", "3"])), 0);
+        assert_eq!(dispatch(&mk(&["render", "--ticks", "3"])), 0);
+        assert_eq!(dispatch(&mk(&["bench", "--agents", "200", "--ticks", "2"])), 0);
+    }
 }

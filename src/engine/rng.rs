@@ -115,6 +115,11 @@ mod tests {
     }
 
     #[test]
+    fn below_zero_is_guarded() {
+        assert_eq!(Rng::seed(1).below(0), 0);
+    }
+
+    #[test]
     fn shuffle_is_a_permutation() {
         let mut r = Rng::seed(123);
         let mut v: Vec<u32> = (0..100).collect();
