@@ -15,7 +15,6 @@
 .vscode/
 *.swp
 *.swo
-*~
 
 # OS noise
 .DS_Store
