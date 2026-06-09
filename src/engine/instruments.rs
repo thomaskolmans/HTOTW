@@ -179,6 +179,28 @@ pub fn total_welfare(world: &World) -> f64 {
     sum
 }
 
+/// Mean **subjective well-being** of the living population in `[0,1]` (Phase
+/// 9): the average of each agent's slow EMA of realised need satisfaction
+/// (Diener 1984; Kahneman & Krueger 2006 on measured life satisfaction). A
+/// read-only readout of the `wellbeing` ledger — it starts neutral at 0.5 and
+/// moves only as agents' lived satisfaction does; it is never set and never
+/// feeds back. 0.5 (the neutral start) when no one is alive.
+pub fn mean_wellbeing(world: &World) -> f64 {
+    let mut sum = 0.0;
+    let mut n = 0usize;
+    for i in 0..world.agents.len() {
+        if world.agents.alive[i] {
+            sum += world.agents.wellbeing[i];
+            n += 1;
+        }
+    }
+    if n == 0 {
+        0.5
+    } else {
+        sum / n as f64
+    }
+}
+
 /// **Commons health**: the fraction of the landscape's pristine carrying
 /// capacity that still stands. Open access mines cells past their regeneration
 /// threshold and degrades capacity, dragging this toward 0 (Hardin); a quota or

@@ -26,11 +26,13 @@
 //! ```
 
 pub mod calibration;
+pub mod counterfactual;
 pub mod institutions;
 pub mod instruments;
 pub mod parallel;
 pub mod polity;
 pub mod rng;
+pub mod society;
 pub mod trace;
 pub mod world;
 
@@ -38,6 +40,7 @@ pub use calibration::{
     calibrate, compare, default_targets, evaluate, knob_names, loss, welfare, Calibration, Outcome,
     RunSummary, Scenario, Target, Verdict,
 };
+pub use counterfactual::{apply_edits, sweep, whatif, Edit, SweepEntry, WhatIf};
 pub use institutions::{
     CorruptOfficial, Decarbonize, HarvestQuota, OpenAccess, PropertyRights, Redistribute, Rule,
     WealthTax,
@@ -48,6 +51,7 @@ pub use polity::{
     agent_support, govern, ChoiceMechanism, Polity, PolicyOption, WealthRanking,
 };
 pub use rng::Rng;
+pub use society::{Governance, Law, SocietySpec};
 pub use trace::{
     record, render_agent_density, render_resource_heatmap, render_run, render_sparkline,
     render_trace_sparklines, Trace, TRACE_CSV_HEADER,
@@ -1042,6 +1046,239 @@ mod phase6_collective_choice_tests {
         let (tb, pb) = run();
         assert_eq!(ta, tb, "governed traces must be bit-identical");
         assert_eq!(pa, pb, "final populations must match");
+    }
+}
+
+#[cfg(test)]
+mod phase9_psychology_tests {
+    //! Phase 9 — HUMAN PSYCHOLOGY as a driving factor. Psychological traits
+    //! (patience/time preference, risk aversion, fairness/inequity aversion,
+    //! conformity) enter as heterogeneous, heritable PRIMITIVES that drive
+    //! behaviour mechanisms only — harvest restraint, rule compliance,
+    //! reproductive prudence, policy preferences. Whether a patient culture
+    //! sustains its commons, or a fair-minded one redistributes, is MEASURED.
+    //! The coupling is OPT-IN: `demo()` is byte-identical to before.
+    //! (Frederick/Loewenstein/O'Donoghue 2002; Fehr & Schmidt 1999; Pratt 1964;
+    //! Cialdini & Goldstein 2004; Henrich 2015; Ostrom 1990.)
+    use super::institutions::{HarvestQuota, Rule};
+    use super::instruments::{self, measure};
+    use super::polity::{ChoiceMechanism, Polity, PolicyOption};
+    use super::world::{Primitives, World};
+
+    /// A culture: every agent's traits pinned to the given values (min = max,
+    /// and mutation clamps children to the same point), so two cultures can be
+    /// contrasted at the same seed with everything else identical.
+    fn culture(
+        base: Primitives,
+        patience: f64,
+        risk: f64,
+        fairness: f64,
+        conformity: f64,
+        seed: u64,
+    ) -> Primitives {
+        Primitives {
+            psyche_enabled: true,
+            patience_min: patience,
+            patience_max: patience,
+            risk_aversion_min: risk,
+            risk_aversion_max: risk,
+            fairness_min: fairness,
+            fairness_max: fairness,
+            conformity_min: conformity,
+            conformity_max: conformity,
+            seed,
+            ..base
+        }
+    }
+
+    /// The default world has psychology OFF and inert neutral traits — the
+    /// no-op guarantee that keeps every pre-Phase-9 test (and its bit-exact
+    /// determinism) valid.
+    #[test]
+    fn psychology_is_off_and_neutral_by_default() {
+        let p = Primitives::demo();
+        assert!(!p.psyche_enabled, "psychology must be OFF in demo()");
+        let w = World::new(p);
+        for i in 0..w.agents.len() {
+            assert_eq!(w.agents.patience[i], 0.5);
+            assert_eq!(w.agents.risk_aversion[i], 0.5);
+            assert_eq!(w.agents.fairness[i], 0.5);
+            assert_eq!(w.agents.conformity[i], 0.5);
+        }
+        assert!(Primitives::human_nature().psyche_enabled);
+    }
+
+    /// **A patient culture sustains a fragile commons with NO law in force.**
+    /// Discounting is the psychological root of the tragedy of the commons:
+    /// an impatient agent strips its cell; a patient one internalises the
+    /// standing stock's future value and self-limits the way an owner would.
+    /// Same seed, same geography, no rules — only the time preference differs;
+    /// the commons outcome (and the population it carries) EMERGES.
+    #[test]
+    fn patient_culture_sustains_a_commons_without_any_law() {
+        for seed in [1u64, 7, 42] {
+            let base = Primitives::fragile_commons();
+            let patient = culture(base.clone(), 0.9, 0.5, 0.5, 0.5, seed);
+            let impatient = culture(base, 0.05, 0.5, 0.5, 0.5, seed);
+
+            let run = |p: Primitives| {
+                let mut w = World::new(p);
+                for _ in 0..300 {
+                    w.step();
+                }
+                (instruments::commons_health(&w), w.agents.alive_count())
+            };
+            let (ch_pat, pop_pat) = run(patient);
+            let (ch_imp, pop_imp) = run(impatient);
+            assert!(
+                ch_pat > ch_imp,
+                "patience should sustain the commons without a law (seed {seed}): {ch_pat} vs {ch_imp}"
+            );
+            assert!(
+                pop_pat > pop_imp,
+                "the sustained commons should carry more people (seed {seed}): {pop_pat} vs {pop_imp}"
+            );
+        }
+    }
+
+    /// **Risk aversion is precautionary**: a risk-averse culture demands a
+    /// larger energy buffer before reproducing, so fewer births happen — the
+    /// total number of agents ever created is strictly smaller at the same
+    /// seed. Demography responds to psychology; nothing demographic is set.
+    #[test]
+    fn risk_aversion_slows_reproduction() {
+        for seed in [1u64, 7, 42] {
+            let bold = culture(Primitives::demo(), 0.5, 0.05, 0.5, 0.5, seed);
+            let timid = culture(Primitives::demo(), 0.5, 0.95, 0.5, 0.5, seed);
+            let births = |p: Primitives| {
+                let mut w = World::new(p);
+                for _ in 0..200 {
+                    w.step();
+                }
+                w.agents.len() // total ever created = seeds + births
+            };
+            let b_bold = births(bold);
+            let b_timid = births(timid);
+            assert!(
+                b_timid < b_bold,
+                "risk aversion should slow reproduction (seed {seed}): {b_timid} vs {b_bold}"
+            );
+        }
+    }
+
+    /// **Conformists uphold an institution their own patience would not.** Both
+    /// cultures are equally impatient (left alone they'd strip the commons);
+    /// under a harvest quota the conformist culture's compliance follows the
+    /// institution's track record while the non-conformists follow their own
+    /// (low) time preference — so the measured compliance rate is far higher
+    /// among conformists. Norm-following is a real social force, measured.
+    #[test]
+    fn conformists_comply_where_nonconformists_defy() {
+        for seed in [1u64, 7, 42] {
+            let base = Primitives::fragile_commons();
+            let conformist = culture(base.clone(), 0.05, 0.5, 0.5, 0.95, seed);
+            let maverick = culture(base, 0.05, 0.5, 0.5, 0.05, seed);
+            let rules: Vec<Box<dyn Rule>> = vec![Box::new(HarvestQuota::new(0.3))];
+            let compliance = |p: Primitives| {
+                let mut w = World::new(p);
+                for _ in 0..200 {
+                    w.step_with_rules(&rules);
+                }
+                measure(&w).compliance_rate
+            };
+            let c_conf = compliance(conformist);
+            let c_mav = compliance(maverick);
+            assert!(
+                c_conf > c_mav,
+                "conformity should raise measured compliance (seed {seed}): {c_conf} vs {c_mav}"
+            );
+        }
+    }
+
+    /// **Fair-mindedness broadens the redistribution coalition** (Fehr–Schmidt
+    /// advantageous-inequity aversion): in a fair-minded culture even the rich
+    /// support the floor, so redistribution wins **even under wealth-weighted
+    /// voting** — the same plutocratic mechanism that blocks it in a selfish
+    /// culture. Institutions and psychology interact; the adopted policy set is
+    /// measured out of the population either way.
+    #[test]
+    fn fairness_broadens_the_redistribution_coalition() {
+        for seed in [1u64, 7, 42] {
+            let mk = |fairness: f64| {
+                let mut p = culture(Primitives::demo(), 0.5, 0.5, fairness, 0.5, seed);
+                p.n_agents = 800;
+                let mut w = World::new(p);
+                for _ in 0..150 {
+                    w.step();
+                }
+                w
+            };
+            let fair = mk(0.9);
+            let selfish = mk(0.1);
+
+            let share = |w: &World| {
+                let mut pol = Polity::new(ChoiceMechanism::Majority, u64::MAX);
+                pol.hold_election(w);
+                pol.vote_share(PolicyOption::Redistribution)
+            };
+            assert!(
+                share(&fair) > share(&selfish),
+                "fairness should broaden redistribution support (seed {seed})"
+            );
+
+            // Under plutocratic voting the selfish rich block the transfer; the
+            // fair-minded rich do not.
+            let elite_enacts = |w: &World| {
+                let mut pol = Polity::new(ChoiceMechanism::WealthWeighted, u64::MAX);
+                pol.hold_election(w);
+                pol.is_active(PolicyOption::Redistribution)
+            };
+            assert!(
+                elite_enacts(&fair),
+                "a fair-minded society should redistribute even under wealth-weighted voting (seed {seed})"
+            );
+            assert!(
+                !elite_enacts(&selfish),
+                "a selfish plutocracy should block redistribution (seed {seed})"
+            );
+        }
+    }
+
+    /// **Well-being is measured, never set**: it starts exactly neutral (0.5)
+    /// and moves with lived need satisfaction over a run, staying in `[0,1]`.
+    #[test]
+    fn wellbeing_is_measured_never_set() {
+        let mut w = World::new(Primitives::human_nature());
+        assert!((instruments::mean_wellbeing(&w) - 0.5).abs() < 1e-12, "starts neutral");
+        for _ in 0..200 {
+            w.step();
+        }
+        let wb = instruments::mean_wellbeing(&w);
+        assert!((0.0..=1.0).contains(&wb), "well-being in [0,1]: {wb}");
+        assert!(
+            (wb - 0.5).abs() > 1e-6,
+            "well-being should move with lived satisfaction, got {wb}"
+        );
+    }
+
+    /// Determinism is preserved with psychology ON: same seed ⇒ bit-identical
+    /// populations, resources and measured well-being every tick.
+    #[test]
+    fn psychology_is_deterministic() {
+        let mut p = Primitives::human_nature();
+        p.seed = 9;
+        let mut a = World::new(p.clone());
+        let mut b = World::new(p);
+        for _ in 0..200 {
+            a.step();
+            b.step();
+            assert_eq!(a.agents.alive_count(), b.agents.alive_count());
+            assert_eq!(a.total_resource().to_bits(), b.total_resource().to_bits());
+            assert_eq!(
+                instruments::mean_wellbeing(&a).to_bits(),
+                instruments::mean_wellbeing(&b).to_bits()
+            );
+        }
     }
 }
 

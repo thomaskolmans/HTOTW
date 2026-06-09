@@ -1,0 +1,21 @@
+# laissez-faire — a minimal-state market society.
+#
+# Property rights and nothing else: no tax, no transfers, no quotas, no climate
+# mandate. Collective choice is wealth-weighted (de facto power follows money —
+# Acemoglu & Robinson). Demsetz's bet is that ownership alone internalises the
+# externalities; run it and measure whether that holds, and at what cost in
+# measured inequality. An archetype, not a portrait — calibrate to match data.
+
+name = laissez-faire
+base = demo
+
+[primitives]
+psychology = on
+
+[governance]
+mechanism = wealth-weighted
+period = 25
+threshold = 0.5
+
+[laws]
+property-rights = on

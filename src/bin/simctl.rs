@@ -33,6 +33,8 @@ fn dispatch(args: &[String]) -> i32 {
         Some("list") => cmd_list(),
         Some("calibrate") => cmd_calibrate(),
         Some("experiment") => cmd_experiment(),
+        Some("society") => cmd_society(&args[1..]),
+        Some("whatif") => cmd_whatif(&args[1..]),
         Some("trace") => cmd_trace(&args[1..]),
         Some("render") => cmd_render(&args[1..]),
         Some("bench") => cmd_bench(&args[1..]),
@@ -63,12 +65,18 @@ fn print_help() {
          \x20 simctl list\n\
          \x20 simctl calibrate   # Phase-4 agent engine: tune PRIMITIVES to emergent-moment targets (MSM)\n\
          \x20 simctl experiment  # Phase-4: rank two regimes on measured welfare across seeds\n\
+         \x20 simctl society [--file PATH | --preset NAME] [--ticks N] [--seeds A,B,C]\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 # run a society spec (.soc) and report its emergent outcome\n\
+         \x20 simctl whatif  [--file PATH | --preset NAME] [--do LAW[=VAL]]... [--undo LAW]...\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 [--sweep] [--top N] [--ticks N] [--seeds A,B,C]\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 # mass do/undo laws on a society and measure the counterfactual\n\
          \x20 simctl trace  [--preset NAME] [--ticks N] [--seed S] [--csv PATH]  # record emergent series to CSV\n\
          \x20 simctl render [--preset NAME] [--ticks N] [--seed S]               # ASCII heatmap + sparklines\n\
          \x20 simctl bench  [--agents N] [--cells N] [--ticks N] [--seed S] [--threads N]  # large-population scaling benchmark\n\
          \x20 simctl help\n\
          \n\
-         AGENT-ENGINE PRESETS (for trace/render): demo, fragile-commons, warming-world\n\
+         AGENT-ENGINE PRESETS (for trace/render): demo, fragile-commons, warming-world, human-nature\n\
+         SOCIETY PRESETS (for society/whatif --preset): see 'simctl list'\n\
          \n\
          POLICY SPEC: name:start=YEAR,param=VALUE  (e.g. carbon-tax:start=2030,param=0.8)\n\
          \n\
@@ -99,6 +107,19 @@ fn cmd_list() -> i32 {
     }
     println!("\nAgent-engine presets (use with trace/render --preset NAME):");
     for name in ENGINE_PRESETS {
+        println!("  {name}");
+    }
+    println!("\nSociety archetypes (use with society/whatif --preset NAME, or copy as a .soc file):");
+    for (name, text) in society_sim::engine::society::presets() {
+        // First comment line of the spec is its one-line description.
+        let blurb = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix('#').map(|c| c.trim().to_string()))
+            .unwrap_or_default();
+        println!("  {name:<22} {blurb}");
+    }
+    println!("\nLaws (use in a .soc [laws] section or with whatif --do/--undo):");
+    for name in society_sim::engine::society::LAW_NAMES {
         println!("  {name}");
     }
     0
@@ -351,6 +372,320 @@ fn cmd_experiment() -> i32 {
     0
 }
 
+/// Parse `--seeds 1,7,42` into a seed ensemble.
+fn parse_seeds(spec: &str) -> Result<Vec<u64>, String> {
+    let seeds: Result<Vec<u64>, _> = spec
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().parse::<u64>())
+        .collect();
+    match seeds {
+        Ok(v) if !v.is_empty() => Ok(v),
+        _ => Err(format!("invalid --seeds '{spec}' (expected e.g. 1,7,42)")),
+    }
+}
+
+/// Load a society from `--file PATH` or `--preset NAME` (exactly one of them).
+fn load_society(
+    file: &Option<String>,
+    preset: &Option<String>,
+) -> Result<society_sim::engine::SocietySpec, i32> {
+    use society_sim::engine::{society, SocietySpec};
+    match (file, preset) {
+        (Some(path), None) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                eprintln!("cannot read {path}: {e}");
+                1
+            })?;
+            SocietySpec::parse(&text).map_err(|e| {
+                eprintln!("{path}: {e}");
+                2
+            })
+        }
+        (None, Some(name)) => SocietySpec::preset(name).ok_or_else(|| {
+            let names: Vec<&str> = society::presets().iter().map(|(n, _)| *n).collect();
+            eprintln!("unknown society preset: {name}\navailable: {}", names.join(", "));
+            2
+        }),
+        _ => {
+            eprintln!("pass exactly one of --file PATH or --preset NAME");
+            Err(2)
+        }
+    }
+}
+
+/// Print a baseline-vs-variant (or single) table of the headline EMERGENT
+/// moments of one or two outcome distributions.
+fn print_outcome_table(
+    baseline: &society_sim::engine::Outcome,
+    variant: Option<&society_sim::engine::Outcome>,
+) {
+    use society_sim::engine::RunSummary;
+    let rows: [(&str, fn(&RunSummary) -> f64); 6] = [
+        ("population", |r| r.population),
+        ("wealth gini", |r| r.gini),
+        ("life expectancy", |r| r.life_expectancy),
+        ("mean wealth", |r| r.mean_wealth),
+        ("welfare/capita", |r| r.welfare_per_capita),
+        ("commons health", |r| r.commons_health),
+    ];
+    match variant {
+        None => {
+            println!("  {:<18} {:>10}", "metric", "measured");
+            println!("  {}", "-".repeat(30));
+            println!("  {:<18} {:>10.4}", "welfare", baseline.welfare);
+            for (label, f) in rows {
+                println!("  {:<18} {:>10.4}", label, baseline.mean(f));
+            }
+        }
+        Some(v) => {
+            println!("  {:<18} {:>10} {:>10} {:>10}", "metric", "baseline", "variant", "delta");
+            println!("  {}", "-".repeat(52));
+            println!(
+                "  {:<18} {:>10.4} {:>10.4} {:>+10.4}",
+                "welfare",
+                baseline.welfare,
+                v.welfare,
+                v.welfare - baseline.welfare
+            );
+            for (label, f) in rows {
+                let (a, b) = (baseline.mean(f), v.mean(f));
+                println!("  {label:<18} {a:>10.4} {b:>10.4} {:>+10.4}", b - a);
+            }
+        }
+    }
+}
+
+/// `simctl society` — load a society spec (Phase 10: primitives + law stack +
+/// governance as INPUT) and report the emergent outcome of living under it.
+/// Every reported number is measured by the instruments, never set by the spec.
+fn cmd_society(args: &[String]) -> i32 {
+    use society_sim::engine::{evaluate, instruments, World};
+
+    let mut file: Option<String> = None;
+    let mut preset: Option<String> = None;
+    let mut ticks: usize = 300;
+    let mut seeds: Vec<u64> = vec![1, 7, 42];
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" | "-f" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--file needs a value"); };
+                file = Some(v.clone());
+                i += 2;
+            }
+            "--preset" | "-p" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--preset needs a value"); };
+                preset = Some(v.clone());
+                i += 2;
+            }
+            "--ticks" | "-t" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--ticks needs a value"); };
+                match v.parse() { Ok(n) => ticks = n, Err(_) => return arg_err(&format!("invalid --ticks: {v}")) }
+                i += 2;
+            }
+            "--seeds" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--seeds needs a value"); };
+                match parse_seeds(v) { Ok(s) => seeds = s, Err(e) => return arg_err(&e) }
+                i += 2;
+            }
+            other => return arg_err(&format!("unknown argument: {other}")),
+        }
+    }
+
+    let spec = match load_society(&file, &preset) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+
+    println!("society '{}'", spec.name);
+    if spec.laws.is_empty() {
+        println!("  laws: (none — open access)");
+    } else {
+        println!("  laws:");
+        for law in &spec.laws {
+            println!("    {}", law.describe());
+        }
+    }
+    match &spec.governance {
+        Some(g) => println!(
+            "  governance: {:?}, period {}, threshold {}",
+            g.mechanism, g.period, g.threshold
+        ),
+        None => println!("  governance: (none — the law stack is fixed)"),
+    }
+
+    let outcome = evaluate(&spec.scenario(), &seeds, ticks);
+    println!("\nemergent outcome ({} seeds x {ticks} ticks; measured, never set):", seeds.len());
+    print_outcome_table(&outcome, None);
+
+    // One representative run for the instruments the summary doesn't carry.
+    let mut p = spec.primitives.clone();
+    p.seed = seeds[0];
+    let rules = spec.rules();
+    let mut w = World::new(p);
+    for _ in 0..ticks {
+        w.step_with_rules(&rules);
+    }
+    println!("\nrepresentative run (seed {}):", seeds[0]);
+    if w.params().climate_enabled {
+        println!(
+            "  temperature {:.2} K   greenhouse stock {:.1}",
+            w.temperature(),
+            w.greenhouse_stock()
+        );
+    }
+    println!(
+        "  legitimacy {:.3}   state capacity {:.3}   corruption {:.3}   well-being {:.3}",
+        w.legitimacy(),
+        w.state_capacity(),
+        w.corruption(),
+        instruments::mean_wellbeing(&w)
+    );
+    0
+}
+
+/// `simctl whatif` — the mass do/undo counterfactual (Phase 11): take a
+/// society, enact (`--do law=value`) and/or repeal (`--undo law`) laws, run
+/// both worlds on the SAME seeds, and report the measured deltas — or `--sweep`
+/// every subset of its law stack and rank the regimes by emergent welfare.
+fn cmd_whatif(args: &[String]) -> i32 {
+    use society_sim::engine::{counterfactual, Edit, Verdict};
+
+    let mut file: Option<String> = None;
+    let mut preset: Option<String> = None;
+    let mut ticks: usize = 300;
+    let mut seeds: Vec<u64> = vec![1, 7, 42];
+    let mut edits: Vec<Edit> = Vec::new();
+    let mut do_sweep = false;
+    let mut top: usize = 10;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" | "-f" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--file needs a value"); };
+                file = Some(v.clone());
+                i += 2;
+            }
+            "--preset" | "-p" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--preset needs a value"); };
+                preset = Some(v.clone());
+                i += 2;
+            }
+            "--do" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--do needs a value"); };
+                match Edit::parse_do(v) {
+                    Ok(e) => edits.push(e),
+                    Err(e) => return arg_err(&format!("bad --do '{v}': {e}")),
+                }
+                i += 2;
+            }
+            "--undo" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--undo needs a value"); };
+                match Edit::parse_undo(v) {
+                    Ok(e) => edits.push(e),
+                    Err(e) => return arg_err(&format!("bad --undo '{v}': {e}")),
+                }
+                i += 2;
+            }
+            "--sweep" => {
+                do_sweep = true;
+                i += 1;
+            }
+            "--top" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--top needs a value"); };
+                match v.parse() { Ok(n) => top = n, Err(_) => return arg_err(&format!("invalid --top: {v}")) }
+                i += 2;
+            }
+            "--ticks" | "-t" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--ticks needs a value"); };
+                match v.parse() { Ok(n) => ticks = n, Err(_) => return arg_err(&format!("invalid --ticks: {v}")) }
+                i += 2;
+            }
+            "--seeds" => {
+                let Some(v) = args.get(i + 1) else { return arg_err("--seeds needs a value"); };
+                match parse_seeds(v) { Ok(s) => seeds = s, Err(e) => return arg_err(&e) }
+                i += 2;
+            }
+            other => return arg_err(&format!("unknown argument: {other}")),
+        }
+    }
+
+    let spec = match load_society(&file, &preset) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+
+    if do_sweep {
+        let entries = match counterfactual::sweep(&spec, &seeds, ticks) {
+            Ok(e) => e,
+            Err(e) => return arg_err(&e),
+        };
+        println!(
+            "sweep of '{}': {} regimes (every subset of {} laws) x {} seeds x {ticks} ticks",
+            spec.name,
+            entries.len(),
+            spec.laws.len(),
+            seeds.len()
+        );
+        println!("ranked by measured welfare (geomean of prosperity-equity-sustainability-survival):\n");
+        println!(
+            "  {:<4} {:>8} {:>7} {:>8} {:>6}  laws",
+            "rank", "welfare", "gini", "commons", "pop"
+        );
+        println!("  {}", "-".repeat(70));
+        for (rank, e) in entries.iter().take(top).enumerate() {
+            println!(
+                "  {:<4} {:>8.4} {:>7.3} {:>8.3} {:>6.0}  {}",
+                rank + 1,
+                e.outcome.welfare,
+                e.outcome.mean(|r| r.gini),
+                e.outcome.mean(|r| r.commons_health),
+                e.outcome.mean(|r| r.population),
+                e.label()
+            );
+        }
+        let baseline_label = if spec.laws.is_empty() {
+            "(no laws)".to_string()
+        } else {
+            spec.laws.iter().map(|l| l.name()).collect::<Vec<_>>().join("+")
+        };
+        if let Some(pos) = entries.iter().position(|e| e.label() == baseline_label) {
+            println!("\n  the society as specified ranks #{} of {}", pos + 1, entries.len());
+        }
+        return 0;
+    }
+
+    if edits.is_empty() {
+        return arg_err("nothing to test: pass --do/--undo edits or --sweep");
+    }
+
+    let described: Vec<String> = edits
+        .iter()
+        .map(|e| match e {
+            Edit::Do(law) => format!("do {}", law.describe()),
+            Edit::Undo(name) => format!("undo {name}"),
+        })
+        .collect();
+    let result = match counterfactual::whatif(&spec, &edits, &seeds, ticks) {
+        Ok(r) => r,
+        Err(e) => return arg_err(&e),
+    };
+
+    println!("what-if on '{}': {}", spec.name, described.join(", "));
+    println!("({} seeds x {ticks} ticks, same seeds in both arms — the laws are the only difference)\n", seeds.len());
+    print_outcome_table(&result.baseline, Some(&result.variant));
+    let verdict = match result.verdict {
+        Verdict::First => "the society as specified has higher measured welfare",
+        Verdict::Second => "the edited society has higher measured welfare",
+        Verdict::Tie => "a tie on measured welfare",
+    };
+    println!("\nverdict: {verdict}");
+    0
+}
+
 /// Resolve an agent-engine preset name to its [`Primitives`]. These are the
 /// first-principles primitive sets the Phase-1–6 engine runs on (distinct from
 /// the legacy system-dynamics `--scenario`s used by `simctl run`).
@@ -360,11 +695,12 @@ fn engine_preset(name: &str) -> Option<society_sim::engine::Primitives> {
         "demo" => Some(Primitives::demo()),
         "fragile-commons" | "fragile_commons" => Some(Primitives::fragile_commons()),
         "warming-world" | "warming_world" => Some(Primitives::warming_world()),
+        "human-nature" | "human_nature" => Some(Primitives::human_nature()),
         _ => None,
     }
 }
 
-const ENGINE_PRESETS: &[&str] = &["demo", "fragile-commons", "warming-world"];
+const ENGINE_PRESETS: &[&str] = &["demo", "fragile-commons", "warming-world", "human-nature"];
 
 /// Shared parse for the trace/render subcommands: `--preset`, `--ticks`, `--seed`
 /// and (trace only) `--csv`. Returns `(primitives, ticks, csv_path)` or an exit
@@ -700,6 +1036,76 @@ mod tests {
         assert_eq!(cmd_bench(&mk(&["--threads", "x"])), 2);
         assert_eq!(cmd_bench(&mk(&["--agents"])), 2);
         assert_eq!(cmd_bench(&mk(&["--bogus"])), 2);
+    }
+
+    #[test]
+    fn society_subcommand() {
+        // Preset path: a quick ensemble over a bundled archetype.
+        assert_eq!(
+            cmd_society(&mk(&["--preset", "stewardship-commons", "--ticks", "20", "--seeds", "1,2"])),
+            0
+        );
+        // Climate branch of the report.
+        assert_eq!(
+            cmd_society(&mk(&["--preset", "egalitarian-green", "--ticks", "10", "--seeds", "1"])),
+            0
+        );
+        // File path: write a spec, run it.
+        let p = tmp("simctl_society.soc");
+        std::fs::write(&p, "name = t\nbase = demo\n[laws]\nwealth-tax = 0.2\n").unwrap();
+        assert_eq!(cmd_society(&mk(&["--file", p.to_str().unwrap(), "--ticks", "10", "--seeds", "1"])), 0);
+        let _ = std::fs::remove_file(&p);
+        // Errors.
+        assert_eq!(cmd_society(&mk(&[])), 2); // neither --file nor --preset
+        assert_eq!(cmd_society(&mk(&["--preset", "atlantis"])), 2);
+        assert_eq!(cmd_society(&mk(&["--file", "/no/such/file.soc"])), 1);
+        assert_eq!(cmd_society(&mk(&["--preset"])), 2);
+        assert_eq!(cmd_society(&mk(&["--ticks", "x", "--preset", "laissez-faire"])), 2);
+        assert_eq!(cmd_society(&mk(&["--seeds", "a,b", "--preset", "laissez-faire"])), 2);
+        assert_eq!(cmd_society(&mk(&["--bogus"])), 2);
+        let bad = tmp("simctl_society_bad.soc");
+        std::fs::write(&bad, "[laws]\nteleport = 1\n").unwrap();
+        assert_eq!(cmd_society(&mk(&["--file", bad.to_str().unwrap()])), 2);
+        let _ = std::fs::remove_file(&bad);
+    }
+
+    #[test]
+    fn whatif_subcommand() {
+        // Undo a law on a preset.
+        assert_eq!(
+            cmd_whatif(&mk(&[
+                "--preset", "stewardship-commons", "--undo", "harvest-quota",
+                "--ticks", "20", "--seeds", "1,2",
+            ])),
+            0
+        );
+        // Do a law (with and without a value).
+        assert_eq!(
+            cmd_whatif(&mk(&[
+                "--preset", "open-frontier", "--do", "harvest-quota=0.3", "--do", "property-rights",
+                "--ticks", "20", "--seeds", "1",
+            ])),
+            0
+        );
+        // Sweep every law subset.
+        assert_eq!(
+            cmd_whatif(&mk(&[
+                "--preset", "stewardship-commons", "--sweep", "--top", "3",
+                "--ticks", "15", "--seeds", "1",
+            ])),
+            0
+        );
+        // Errors.
+        assert_eq!(cmd_whatif(&mk(&["--preset", "open-frontier"])), 2); // no edits, no sweep
+        assert_eq!(cmd_whatif(&mk(&["--preset", "open-frontier", "--undo", "wealth-tax"])), 2); // not present
+        assert_eq!(cmd_whatif(&mk(&["--preset", "open-frontier", "--do", "teleport"])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--preset", "open-frontier", "--undo", "teleport"])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--do"])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--undo"])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--top", "x"])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--ticks"])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--seeds", ""])), 2);
+        assert_eq!(cmd_whatif(&mk(&["--bogus"])), 2);
     }
 
     #[test]

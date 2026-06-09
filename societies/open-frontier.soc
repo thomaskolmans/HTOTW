@@ -1,0 +1,16 @@
+# open-frontier — the ungoverned baseline (Hardin's frontier).
+#
+# A fragile commons, a psychologically heterogeneous population, and NO laws,
+# structures or institutions at all. This is the control every other society is
+# compared against: whatever happens here (the commons degrades, inequality
+# emerges, no public pool exists) is what nature + human psychology produce on
+# their own. An archetype, not a portrait — calibrate primitives to match data.
+
+name = open-frontier
+base = fragile-commons
+
+[primitives]
+psychology = on
+
+[laws]
+# (none — open access)

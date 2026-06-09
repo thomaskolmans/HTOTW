@@ -272,6 +272,82 @@ North (institutions), Olson (collective action), Tilly / Acemoglu–Robinson
   `parallel_matches_sequential_bit_for_bit`, `parallel_runs_are_deterministic`,
   `large_population_runs_without_panic`, `thread_cap_does_not_change_results`.
 
+* **Phase 9 — human psychology as a driving factor.** ✅ Done (extensions to
+  [`engine::world`] + [`engine::polity`] + [`engine::instruments`]). Psychology
+  enters the engine exactly the way biology does: as heterogeneous, **heritable
+  per-agent primitives** drawn from configurable ranges — **patience** (time
+  preference, Frederick/Loewenstein/O'Donoghue 2002), **risk aversion**
+  (Pratt 1964; Arrow 1965), **fairness / inequity aversion** (Fehr & Schmidt
+  1999) and **conformity / norm sensitivity** (Cialdini & Goldstein 2004;
+  Henrich 2015) — which drive *behaviour mechanisms only*: a patient agent
+  self-limits its harvest even with no rule in force (discounting is the
+  psychological root of the tragedy of the commons, foresight its
+  non-institutional resolution); compliance willingness blends the
+  institution's legitimacy with the agent's own patience, weighted by its
+  conformity; risk-averse agents hold a larger precautionary buffer before
+  reproducing; and fair-minded above-mean agents support a redistributive
+  floor (the Fehr–Schmidt β), so a fair-minded culture redistributes **even
+  under wealth-weighted voting**. A per-agent **subjective well-being** ledger
+  (a slow EMA of realised need satisfaction; Diener 1984, Kahneman & Krueger
+  2006) is measured by `instruments::mean_wellbeing` and never feeds back. The
+  whole coupling is **OPT-IN** (`psyche_enabled`, OFF in `demo()`; preset
+  `Primitives::human_nature()`): disabled, every trait is an inert neutral, no
+  extra RNG is consumed, and the engine is byte-identical to before. Emergent
+  results: a patient culture sustains a fragile commons *without any law*;
+  conformists comply where mavericks defy; risk aversion slows reproduction;
+  fairness broadens the redistribution coalition across mechanisms. Tests:
+  `psychology_is_off_and_neutral_by_default`,
+  `patient_culture_sustains_a_commons_without_any_law`,
+  `risk_aversion_slows_reproduction`,
+  `conformists_comply_where_nonconformists_defy`,
+  `fairness_broadens_the_redistribution_coalition`,
+  `wellbeing_is_measured_never_set`, `psychology_is_deterministic`.
+* **Phase 10 — society-as-input.** ✅ Done ([`engine::society`]). The
+  configurable front door the project's vision calls for: describe an existing
+  (or imagined) society in a plain-text **`.soc` spec** — its
+  physical/biological/psychological *primitives*, its **stack of laws and
+  institutions** (`[laws]`: `wealth-tax`, `redistribute`, `harvest-quota`,
+  `property-rights`, `decarbonize`, `corrupt-official`), and optionally how it
+  governs itself (`[governance]`: `majority` / `wealth-weighted`, period,
+  threshold) — and load it with `SocietySpec::parse`. Parsing is **strict**
+  (unknown keys/laws/sections are errors with line numbers) and the hard rule
+  holds at the input layer: *there is deliberately no key for any macro
+  outcome* (`no_outcome_key_exists` pins this) — to make a spec match a real
+  country you calibrate its primitives until the measured moments agree.
+  Five **archetype presets** ship embedded in the binary (`societies/*.soc`):
+  `open-frontier` (Hardin's ungoverned baseline), `stewardship-commons`
+  (Ostrom), `egalitarian-green` (a redistributive green state),
+  `laissez-faire` (Demsetz property and nothing else) and
+  `extractive-autocracy` (Acemoglu–Robinson extraction) — each runs to a
+  distinct, archetype-true emergent profile, none of it set. CLI:
+  `simctl society [--file PATH | --preset NAME] [--ticks N] [--seeds A,B,C]`.
+  Tests: `parses_a_full_spec`, `minimal_spec_and_defaults`,
+  `strict_errors_carry_line_numbers`, `no_outcome_key_exists`,
+  `all_bundled_presets_parse_and_run`, `law_parse_and_describe_round_trip`.
+* **Phase 11 — mass do/undo counterfactuals.** ✅ Done
+  ([`engine::counterfactual`]). The project's stated purpose made executable:
+  *input a society, then mass-do or undo laws and structures and see how the
+  world would work*. An [`Edit`] enacts (`Do(law)` — replacing a same-named
+  law) or repeals (`Undo(name)` — strict: repealing an absent law is an error)
+  one law; `whatif(spec, edits, seeds, ticks)` evaluates the society **with
+  and without the edits on the same seed ensemble** (geography, biology,
+  psychology and luck identical — the laws are the only difference, so every
+  emergent delta is attributable to them) and returns both outcome
+  distributions plus the welfare verdict; `sweep(spec, seeds, ticks)`
+  enumerates **every subset of the law stack** (2ⁿ regimes, capped at 12 laws)
+  and ranks them by the measured welfare functional, best first. A
+  counterfactual cannot "decide" its outcome any more than a normal run can —
+  the sweep immediately proved its worth in development by showing that a 0.3
+  per-tick wealth tax collapses every regime that contains it (per-tick taxes
+  on the wealth *stock* must be a few percent, as in reality). CLI:
+  `simctl whatif [--file|--preset] [--do LAW[=VAL]]... [--undo LAW]...
+  [--sweep] [--top N] [--ticks N] [--seeds A,B,C]`. Tests:
+  `edits_do_undo_and_replace`,
+  `undoing_conservation_makes_a_fragile_world_worse`,
+  `doing_a_conservation_law_improves_the_frontier`,
+  `sweep_enumerates_and_ranks_every_law_subset`,
+  `sweep_guards_against_combinatorial_explosion`.
+
 ## Testing emergence (TDD)
 
 Assert *emergent properties and regimes*, not back-fitted magnitudes:
@@ -282,12 +358,16 @@ shifts an outcome). Determinism makes these stable rather than flaky.
 
 ## Status
 
-Phases 0, 1, **2**, **3**, **4**, **5**, **6**, **7** and **8** are implemented and green.
-The emergent slice spans the whole
-environment→agent→exchange→institutions→**climate**→**collective-choice** stack
-(the rules a society lives under now emerge from its agents' measured preferences,
-not from the experimenter), and on top of it a **calibration & experiment layer**:
-run a `World` forward
+Phases 0–**11** are implemented and green: the emergent slice spans
+environment → agents → exchange → institutions → calibration → climate →
+collective choice → visualisation → scale → **psychology** (Phase 9), and on
+top of it the two layers the project's vision asks for — **society-as-input**
+(Phase 10: a `.soc` spec composes primitives + the law/institution stack +
+governance, never an outcome) and **mass do/undo counterfactuals** (Phase 11:
+`whatif` and `sweep` re-run the same seeds under edited law stacks and rank
+regimes on measured welfare).
+
+Run a `World` forward
 (optionally under a stack of `Rule`s via `step_with_rules`) and read
 `engine::instruments::measure` — population, life expectancy, inequality, prices,
 money, GDP, specialization, commons health, compliance, state capacity,
@@ -299,6 +379,29 @@ of Simulated Moments) until those *measured* moments match empirical targets
 (targets used only inside the loss), and ranks ways of organising society on a
 measured welfare functional across a seed ensemble. **The hard rule holds
 end-to-end: we simulate _to_ the numbers, never from them.**
+
+**Public interface the psychology / society / counterfactual phases left
+(Phases 9–11):**
+- Psychology primitives on [`Primitives`]: `psyche_enabled` plus the
+  `patience/risk_aversion/fairness/conformity` `_min`/`_max` ranges;
+  `Primitives::human_nature()` switches the coupling on. Per-agent traits live
+  on `Agents` (`patience`, `risk_aversion`, `fairness`, `conformity`,
+  `wellbeing`); `instruments::mean_wellbeing(&World)` is the measured
+  subjective well-being. Add a new behavioural channel by gating it on
+  `psyche_enabled` (the disabled path must stay byte-identical and consume no
+  RNG).
+- `engine::society::{SocietySpec, Law, Governance, presets, LAW_NAMES}` — the
+  `.soc` parser and the embedded archetypes. `SocietySpec::{parse, preset,
+  rules, scenario}`; a `Law` knows its `name`, `describe` rendering and the
+  concrete `rule()` mechanism it enacts. Extend the law catalogue by adding a
+  `Law` variant + `Law::parse` arm (every law must map to a Phase-3/5
+  mechanism, never an outcome).
+- `engine::counterfactual::{Edit, apply_edits, whatif, sweep, WhatIf,
+  SweepEntry, SWEEP_MAX_LAWS}` — the mass do/undo harness, built on
+  `calibration::{evaluate, welfare}` so every verdict is a measured-welfare
+  comparison over a shared seed ensemble.
+- CLI: `simctl society` and `simctl whatif` (see `simctl help`); `simctl list`
+  names the archetypes and the law catalogue.
 
 **Public interface the collective-choice phase left (Phase 6):**
 - `engine::polity::{Polity, ChoiceMechanism, PolicyOption, WealthRanking,

@@ -163,6 +163,42 @@ pub struct Primitives {
     /// **Thermal tolerance width** (K) of the productivity response (Gaussian σ).
     pub temp_tolerance: f64,
 
+    // ---- Phase 9: HUMAN PSYCHOLOGY as a driving factor (OPT-IN). ----
+    // Psychology enters the engine the same way biology does: as heterogeneous,
+    // heritable per-agent PRIMITIVES drawn from these ranges, which drive
+    // *behaviour mechanisms only* (how much an agent harvests when nothing stops
+    // it, whether it complies with a rule, when it dares to reproduce, what it
+    // votes for). Whether a patient culture sustains its commons, or a
+    // fair-minded one redistributes, is then MEASURED — never set. With
+    // `psyche_enabled = false` every trait sits at an inert neutral value, no
+    // extra RNG is consumed, and every behaviour path is byte-identical to the
+    // pre-Phase-9 engine.
+    /// Master switch for the psychology coupling (default OFF → no-op).
+    pub psyche_enabled: bool,
+    /// **Time preference / patience** range `[min,max]` in `[0,1]` (Frederick,
+    /// Loewenstein & O'Donoghue 2002). A patient agent internalises the future
+    /// value of a standing stock and self-limits its harvest even with no rule
+    /// in force; an impatient one strips the cell (the discounting root of the
+    /// tragedy of the commons).
+    pub patience_min: f64,
+    pub patience_max: f64,
+    /// **Risk aversion** range `[min,max]` in `[0,1]` (Pratt 1964; Arrow 1965;
+    /// Kahneman & Tversky 1979). Risk-averse agents hold a larger precautionary
+    /// energy buffer before reproducing.
+    pub risk_aversion_min: f64,
+    pub risk_aversion_max: f64,
+    /// **Fairness / inequity aversion** range `[min,max]` in `[0,1]` (Fehr &
+    /// Schmidt 1999). A fair-minded agent dislikes advantageous inequality too,
+    /// so even above-mean agents may support a redistributive floor.
+    pub fairness_min: f64,
+    pub fairness_max: f64,
+    /// **Conformity / norm sensitivity** range `[min,max]` in `[0,1]` (Cialdini
+    /// & Goldstein 2004; Henrich 2015). A conformist's willingness to comply
+    /// tracks the institution's track record (legitimacy); a non-conformist
+    /// follows its own patience instead.
+    pub conformity_min: f64,
+    pub conformity_max: f64,
+
     /// RNG seed.
     pub seed: u64,
 }
@@ -219,8 +255,33 @@ impl Primitives {
             emissivity: 0.62,    // effective emissivity giving ~288 K equilibrium
             temp_opt: equilibrium_temperature(0.30, 1361.0, 0.62),
             temp_tolerance: 6.0, // K — productivity falls off over a few degrees
+            // Psychology OFF by default: traits sit at an inert neutral 0.5, no
+            // extra RNG is drawn, and every behaviour path matches the
+            // pre-Phase-9 engine byte-for-byte. The ranges below describe a
+            // plausibly heterogeneous population for when the coupling is
+            // switched on (see `Primitives::human_nature`).
+            psyche_enabled: false,
+            patience_min: 0.2,
+            patience_max: 0.8,
+            risk_aversion_min: 0.2,
+            risk_aversion_max: 0.8,
+            fairness_min: 0.2,
+            fairness_max: 0.8,
+            conformity_min: 0.2,
+            conformity_max: 0.8,
             seed: 1,
         }
+    }
+
+    /// A **human-nature** landscape (Phase 9): the demo world with the
+    /// psychology coupling switched ON. Agents now carry heterogeneous,
+    /// heritable psychological traits (patience, risk aversion, fairness,
+    /// conformity) that drive their harvesting restraint, rule compliance,
+    /// reproductive prudence and policy preferences. Nothing socioeconomic is
+    /// set — only the behavioural primitives are enabled; whether (say) a
+    /// patient culture sustains its commons is measured, never decreed.
+    pub fn human_nature() -> Primitives {
+        Primitives { psyche_enabled: true, ..Primitives::demo() }
     }
 
     /// A **fragile-commons** landscape (Phase 3): the demo world with ecological
@@ -412,6 +473,25 @@ pub struct Agents {
     pub skill: Vec<[f64; NGOODS]>,
     /// Cumulative units harvested per good (for the specialization instrument).
     pub harvested: Vec<[f64; NGOODS]>,
+
+    // ---- Phase 9: psychological traits (primitives) + a well-being ledger. ----
+    /// **Patience / time preference** in `[0,1]` (heritable with mutation when
+    /// psychology is enabled; an inert 0.5 otherwise). Drives voluntary harvest
+    /// restraint and non-conformist compliance.
+    pub patience: Vec<f64>,
+    /// **Risk aversion** in `[0,1]`: scales the precautionary energy buffer an
+    /// agent wants before it reproduces.
+    pub risk_aversion: Vec<f64>,
+    /// **Fairness / inequity aversion** in `[0,1]`: a fair-minded above-mean
+    /// agent also supports a redistributive floor (Fehr–Schmidt).
+    pub fairness: Vec<f64>,
+    /// **Conformity / norm sensitivity** in `[0,1]`: how much compliance tracks
+    /// the institution's legitimacy versus the agent's own patience.
+    pub conformity: Vec<f64>,
+    /// **Subjective well-being** in `[0,1]`: a slow EMA of each agent's realised
+    /// need satisfaction (Diener 1984; Kahneman & Krueger 2006). A read-only
+    /// *ledger* the well-being instrument measures — it never feeds back.
+    pub wellbeing: Vec<f64>,
 }
 
 impl Agents {
@@ -433,6 +513,7 @@ impl Agents {
         metabolism: f64,
         vision: u32,
         skill: [f64; NGOODS],
+        psyche: [f64; 4],
     ) -> usize {
         let id = self.alive.len();
         self.alive.push(true);
@@ -444,9 +525,19 @@ impl Agents {
         self.vision.push(vision);
         self.skill.push(skill);
         self.harvested.push([0.0; NGOODS]);
+        self.patience.push(psyche[0]);
+        self.risk_aversion.push(psyche[1]);
+        self.fairness.push(psyche[2]);
+        self.conformity.push(psyche[3]);
+        self.wellbeing.push(0.5);
         id
     }
 }
+
+/// The inert neutral trait vector used whenever psychology is disabled: no RNG
+/// is consumed and every behaviour gate ignores the values, so the engine is
+/// byte-identical to its pre-psychology self.
+const NEUTRAL_PSYCHE: [f64; 4] = [0.5; 4];
 
 /// A single realised bilateral trade, recorded in the per-tick ledger. The
 /// `price` is the realised exchange ratio (units of good 1 per unit of good 0).
@@ -613,6 +704,20 @@ impl World {
             // (around 1.0±), the seed of comparative advantage.
             let s0 = rng.range(0.5, 1.5);
             let s1 = rng.range(0.5, 1.5);
+            // Heterogeneous psychology (Phase 9, opt-in): patience, risk
+            // aversion, fairness and conformity are root behavioural facts about
+            // a person, drawn like metabolism/vision. Disabled ⇒ inert neutrals
+            // with NO RNG consumed (the no-op guarantee).
+            let psyche = if params.psyche_enabled {
+                [
+                    rng.range(params.patience_min, params.patience_max),
+                    rng.range(params.risk_aversion_min, params.risk_aversion_max),
+                    rng.range(params.fairness_min, params.fairness_max),
+                    rng.range(params.conformity_min, params.conformity_max),
+                ]
+            } else {
+                NEUTRAL_PSYCHE
+            };
             let id = agents.push(
                 c,
                 params.init_energy,
@@ -620,6 +725,7 @@ impl World {
                 met,
                 vis,
                 [s0, s1],
+                psyche,
             );
             substrate.occupant[c] = id;
             placed += 1;
@@ -790,6 +896,13 @@ impl World {
             self.agents.energy[i] -= self.agents.metabolism[i];
             self.agents.age[i] += 1;
 
+            // Well-being ledger (Phase 9): a slow EMA of realised need
+            // satisfaction, normalised to [0,1]. Pure measurement state — it is
+            // read by the well-being instrument and never feeds back, so
+            // updating it consumes no RNG and changes no behaviour.
+            let sat = self.satisfaction(&self.agents.good[i]) / NGOODS as f64;
+            self.agents.wellbeing[i] += 0.05 * (sat - self.agents.wellbeing[i]);
+
             let starved = self.agents.energy[i] <= 0.0;
             let aged = self.agents.age[i] >= self.params.max_age
                 || self.rng.f64() < self.senescence_hazard(self.agents.age[i]);
@@ -798,7 +911,16 @@ impl World {
                 continue;
             }
 
-            if self.agents.energy[i] >= self.params.birth_threshold {
+            // Risk-averse agents (Phase 9) hold a larger precautionary buffer
+            // before reproducing (Pratt–Arrow prudence): the *threshold* is the
+            // biology, the multiplier is the psychology. Disabled ⇒ exactly the
+            // bare biological threshold.
+            let birth_at = if self.params.psyche_enabled {
+                self.params.birth_threshold * (1.0 + self.agents.risk_aversion[i])
+            } else {
+                self.params.birth_threshold
+            };
+            if self.agents.energy[i] >= birth_at {
                 self.try_reproduce(i);
             }
         }
@@ -904,17 +1026,37 @@ impl World {
         };
 
         // Voluntary compliance: probability rises with measured legitimacy. With
-        // no rule in force (allowed >= 1) there is nothing to comply with.
+        // no rule in force (allowed >= 1) there is nothing to comply with — but
+        // a *patient* agent (Phase 9) still self-limits: it internalises the
+        // future value of the standing stock exactly the way an owner does
+        // (discounting is the psychological root of the tragedy of the commons,
+        // and foresight its non-institutional resolution). Self-restraint is no
+        // rule encounter, so it writes no compliance ledger.
         let take_frac = if allowed >= 1.0 {
-            1.0
+            if self.params.psyche_enabled {
+                let sustainable = self.params.regen_threshold.max(0.0)
+                    + 0.5 * (1.0 - self.params.regen_threshold);
+                1.0 - self.agents.patience[i] * (1.0 - sustainable)
+            } else {
+                1.0
+            }
         } else {
             // Conditional cooperation (Axelrod / Ostrom reciprocity): the
             // willingness to comply rises *faster* than legitimacy itself (a
             // concave response), so when a cooperative norm gains a foothold it
             // reinforces — 0.5 becomes an unstable tipping point between a
             // high-trust and a low-trust regime, rather than a flat random walk.
+            // With psychology on, the willingness blends the institution's track
+            // record with the agent's own patience, weighted by its conformity
+            // (Cialdini/Henrich): a conformist follows the norm, a
+            // non-conformist follows its own time preference.
             let legit = self.legit_snapshot;
-            let willingness = legit.sqrt();
+            let willingness = if self.params.psyche_enabled {
+                let c = self.agents.conformity[i];
+                (c * legit + (1.0 - c) * self.agents.patience[i]).clamp(0.0, 1.0).sqrt()
+            } else {
+                legit.sqrt()
+            };
             // An agent complies voluntarily with prob = willingness. Owners on
             // their own land always comply (their own future is at stake).
             let voluntary = owns || self.rng.f64() < willingness;
@@ -1171,7 +1313,32 @@ impl World {
                     *s = (*s + self.rng.range(-self.params.mutation, self.params.mutation))
                         .clamp(0.25, 2.0);
                 }
-                let child = self.agents.push(c, endow, child_goods, m, v, skill);
+                // Inherit psychology with mutation (genetic + cultural
+                // transmission, Cavalli-Sforza & Feldman 1981), clamped to the
+                // population's trait range. Disabled ⇒ inert neutrals and NO
+                // extra RNG draws (the no-op guarantee).
+                let psyche = if self.params.psyche_enabled {
+                    let mu = self.params.mutation;
+                    let bounds = [
+                        (self.params.patience_min, self.params.patience_max),
+                        (self.params.risk_aversion_min, self.params.risk_aversion_max),
+                        (self.params.fairness_min, self.params.fairness_max),
+                        (self.params.conformity_min, self.params.conformity_max),
+                    ];
+                    let mut tr = [
+                        self.agents.patience[parent],
+                        self.agents.risk_aversion[parent],
+                        self.agents.fairness[parent],
+                        self.agents.conformity[parent],
+                    ];
+                    for (t, (lo, hi)) in tr.iter_mut().zip(bounds) {
+                        *t = (*t + self.rng.range(-mu, mu)).clamp(lo.min(hi), hi.max(lo));
+                    }
+                    tr
+                } else {
+                    NEUTRAL_PSYCHE
+                };
+                let child = self.agents.push(c, endow, child_goods, m, v, skill, psyche);
                 self.substrate.occupant[c] = child;
                 return;
             }

@@ -393,12 +393,20 @@ pub fn agent_support(
         0.0
     };
 
+    // Fair-mindedness (Phase 9, only when psychology is on): a strongly
+    // inequity-averse agent dislikes *advantageous* inequality too (the
+    // Fehr–Schmidt β), so even an above-mean agent supports a redistributive
+    // floor if its measured fairness trait is high. With psychology off this
+    // channel is inert and the preference is exactly the Meltzer–Richard one.
+    let fair_minded = world.params().psyche_enabled && world.agents.fairness[i] > 0.65;
+
     let mut support = [false; PolicyOption::ALL.len()];
     for (k, &opt) in PolicyOption::ALL.iter().enumerate() {
         support[k] = match opt {
             // The below-mean favour redistribution & the tax that funds it; the
-            // poorer you are, the more you stand to gain from a transfer.
-            PolicyOption::Redistribution => below_mean,
+            // poorer you are, the more you stand to gain from a transfer — and
+            // the fair-minded support the floor regardless of their own rank.
+            PolicyOption::Redistribution => below_mean || fair_minded,
             // Anyone facing material local scarcity wants the commons conserved.
             PolicyOption::Conservation => scarcity > 0.5,
             // The wealthy favour securing what they hold (property rights) and
