@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "society-sim"
 version = "0.1.0"
+
+[[package]]
+name = "worldsim"
+version = "0.1.0"

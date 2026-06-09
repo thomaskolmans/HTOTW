@@ -1,18 +1,39 @@
-# htotw — a society-physics engine
+# htotw — how to organise the world
 
 > *We've engineered almost everything to perfection, yet we still don't know how
 > to live together well. This is a simulator for trying.*
 
-**htotw** ("how to organise the world") is a first-principles, agent-based
-simulator for exploring **how to best organise society**. It is a *physics
-engine for society*: you specify only physical and biological **primitives**, run
-the world forward, and **measure** what emerges — population, inequality, prices,
-money, GDP, institutions, governance, climate, and even *which policies a society
-chooses to adopt*.
+This repository contains **two** simulators:
 
-It is written in **Rust**, the core is **dependency-free**, every run is
-**deterministic** (same seed → bit-identical history), and it is built with
-test-driven development throughout.
+- **[`worldsim`](worldsim/)** — the full, planetary-scale realisation of the
+  vision (start here). A spherical planet with an energy-balance climate, a
+  water cycle and ecosystems; individual humans with needs, ageing and heritable
+  psychology; a multi-sector economy with emergent prices, learning and an
+  energy transition. **Societies are configurable inputs** (laws, taxes,
+  property regimes, carbon pricing, governance); **every social outcome is
+  measured, never set**; and an **evolutionary search finds the best-measured
+  way to operate the world**. See [`worldsim/README.md`](worldsim/README.md) and
+  the explicit, cited assumptions in [`docs/ASSUMPTIONS.md`](docs/ASSUMPTIONS.md).
+
+  ```sh
+  cargo run --release -p worldsim -- run --archetype social-democracy --years 250
+  cargo run --release -p worldsim -- compare --archetype laissez-faire --archetype degrowth-commons
+  cargo run --release -p worldsim -- search        # find the best way to operate the world
+  ```
+
+- **`society-sim`** (this crate, below) — the original proof-of-concept
+  *physics engine for society*: an abstract resource-grid agent model where
+  population, inequality, prices, money, GDP, institutions, governance, climate
+  and even *which policies a society adopts* all emerge from physical and
+  psychological primitives. It remains the conceptual seed and a fast,
+  well-tested sandbox.
+
+Both are written in **Rust**, are **dependency-free**, run **deterministically**
+(same seed → bit-identical history), and are built test-first.
+
+---
+
+## `society-sim` (the proof of concept)
 
 ## The one rule that defines this project
 
