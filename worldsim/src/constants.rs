@@ -124,3 +124,36 @@ pub const EMISSION_FACTOR_FOSSIL: f64 = 0.04;
 /// CO₂ from converting high-biomass land to agriculture (land-use change,
 /// ~10–15% of historical emissions; IPCC).
 pub const EMISSION_FACTOR_LANDUSE: f64 = 0.01;
+
+// ---- Behavioural structure (response *forms*; the directions and strengths
+// of every realised decision come from each agent's own psychology & measured
+// situation, never from a target outcome). ----
+
+/// Job-switching threshold: a worker abandons its sector when another pays
+/// more than `1 + JOB_INERTIA + JOB_INERTIA·risk_aversion` times its own wage.
+/// Labour-market friction / switching costs are large and heterogeneous
+/// (Artuç, Chaudhuri & McLaren 2010); risk-averse workers switch later.
+pub const JOB_INERTIA: f64 = 0.2;
+/// Fraction of *surplus* income (above own survival) a person of fairness 1
+/// gives to the visibly deprived around them per year. Voluntary giving runs
+/// 1–4% of income in observed societies and tracks prosocial preference
+/// (Fehr & Schmidt 1999; List 2011); scaled by the individual fairness trait.
+pub const CHARITY_RATE: f64 = 0.1;
+/// Fraction of surplus income a person of patience 1 invests (defers) per
+/// year. Saving is the behavioural face of time preference: the patient defer
+/// more (the discounting literature's core result; Frederick et al. 2002).
+pub const INVEST_RATE: f64 = 0.15;
+/// Opportunity-cost weight in the fertility decision: childrearing time costs
+/// more for the higher-skilled (their forgone wage is larger), the
+/// quantity–quality trade-off behind the demographic transition (Becker 1960;
+/// Galor & Weil 2000). Realised fertility falls as human capital rises.
+pub const FERTILITY_OPPORTUNITY_COST: f64 = 0.5;
+/// Fraction of workers who actively search/consider a job switch in a given
+/// year (staggered adjustment, Calvo 1983; observed annual job-reallocation
+/// rates run 10–20% — Davis & Haltiwanger 1992). Stops the unphysical
+/// all-at-once herding a synchronous best-response would produce.
+pub const JOB_SEARCH_RATE: f64 = 0.15;
+/// Granularity of one referendum step on a fiscal dial (how much one vote can
+/// move a tax/price per electoral period — institutional stickiness; the
+/// *direction* of every step is the voters' measured interest, never scripted).
+pub const REFERENDUM_STEP: f64 = 0.05;

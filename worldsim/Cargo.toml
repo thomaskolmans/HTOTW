@@ -16,7 +16,3 @@ path = "src/main.rs"
 
 # Dependency-free on purpose: reproducibility, fast builds, no hidden models.
 [dependencies]
-
-[profile.release]
-lto = true
-codegen-units = 1

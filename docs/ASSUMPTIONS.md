@@ -39,6 +39,26 @@ Earth-like land fraction, a ~288 K mean, a pre-modern life-expectancy regime).
 They are **scale-model** units, not predictions; the realised macro quantities
 emerge and are measured.
 
+## Rule 3 — social structure emerges or is configured; it is never hard-coded
+
+Mechanisms that earlier hid as fixed rules are now either **emergent from
+individual choice** or **explicit configurable inputs**:
+
+| Structure | How it is produced now |
+|---|---|
+| Labour allocation across sectors | each worker **chooses** by following observed wages (cobweb dynamics + switching friction; Ezekiel 1938, Artuç 2010) — no planner |
+| Provisioning of dependants | **kin provisioning** (parents pay their children's bills; Kaplan 1996) + **voluntary charity** from the fair-minded (Fehr–Schmidt) — not a fiat transfer |
+| Investment / capital formation | individual **saving** out of surplus, scaled by patience (time preference; Frederick 2002) |
+| Fertility | an individual decision with a Becker **quantity–quality** opportunity cost, so the demographic transition emerges from human capital (Becker 1960; Galor & Weil 2000) |
+| Policy change over time | **referenda** in which each person votes its measured self-interest; the mechanism only sets whose vote counts (Downs; Meltzer–Richard; Acemoglu–Robinson) |
+| The welfare objective | an explicit **`Objective`** input — the evaluator's *values*, never a property of the world |
+
+The remaining behavioural constants (in `constants.rs`, "Behavioural structure")
+are *response forms* — how strongly a trait maps to a choice — not directions or
+targets. Their **magnitudes are calibration knobs**, cited to the empirical
+ranges they come from; the *direction* of every decision comes from the agent's
+own psychology and measured situation.
+
 ## What this is and isn't
 
 It is an **illustrative**, first-principles, agent-based model. Grounding the

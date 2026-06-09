@@ -25,12 +25,25 @@ scale and with real subsystems, around four commitments:
      energy, materials and manufactured goods, each with capital, learning-by-
      doing (Wright/Arrow), and emergent prices that read off realised scarcity.
 
+   Critically, **no central planner runs the economy**: each working-age person
+   *chooses its own sector* by following last year's observed wages (cobweb
+   dynamics with switching friction); investment is individual saving driven by
+   patience; children are fed by **kin provisioning** and the deprived by
+   **voluntary charity** from the fair-minded; fertility is an individual
+   decision with a Becker quantity–quality opportunity cost (so the demographic
+   transition *emerges* from rising human capital). The only collective levers
+   are the configured institutions.
+
 2. **Societies are configurable inputs** (`config`, `society`). The build-up of
    rules, structures and institutions is a `SocietyParams`: property regime,
    taxation and progressivity, transfers, public spending on schooling /
    infrastructure / research / enforcement, a carbon price, border openness, and
-   a governance mechanism (fixed, majority, or wealth-weighted referenda). You
-   describe an existing or imagined society — in code or a strict `.world`
+   a governance mechanism. Under `majority` or `wealth-weighted` governance the
+   fiscal/ecological dials are not scripted — they move each period by
+   **referendum**, where every person votes its *measured self-interest* (the
+   below-mean back redistribution, the climate-harmed back a carbon price, but
+   fossil-sector workers vote it down — the just-transition conflict, emergent).
+   You describe an existing or imagined society — in code or a strict `.world`
    text file — and run it.
 
 3. **Everything social is measured, never set** (`measure`). There is no input
@@ -38,13 +51,17 @@ scale and with real subsystems, around four commitments:
    trajectory. Instruments take `&World` and cannot mutate it; you calibrate
    *primitives* until measured reality matches — you simulate **to** the
    numbers, never **from** them. The assumptions the model does make are
-   physical/biological, centralised and cited in `src/constants.rs`.
+   physical/biological/behavioural, centralised and cited in `src/constants.rs`.
 
 4. **Search for the best way to operate the world** (`search`). A deterministic
    (μ+λ) evolution strategy explores the society-parameter space, scoring each
-   candidate on the measured long-run welfare functional — the geometric mean of
-   well-being × equity × sustainability × survival — averaged over a seed
-   ensemble and the run's final years (sustained, not lucky, welfare).
+   candidate on the measured long-run welfare functional — a weighted geometric
+   mean of well-being × equity × sustainability × survival — averaged over a
+   seed ensemble and the run's final years (sustained, not lucky, welfare). The
+   **weights are an explicit `Objective` input** (the evaluator's *values*), not
+   the simulator's opinion: a `headcount` objective and a `green` objective
+   rightly crown different societies. Values are where the judgement is made,
+   out in the open — never smuggled into the world.
 
 Everything is **dependency-free** and **bit-deterministic** (same config + seed
 ⇒ identical history), like the original engine.

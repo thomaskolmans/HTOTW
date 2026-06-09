@@ -27,6 +27,14 @@ pub struct People {
     /// Years of unmet survival need accumulated (drives deprivation hazard &
     /// out-migration pressure). Resets when needs are met.
     pub deprivation: Vec<f64>,
+    /// The sector this person currently works in (`NO_JOB` if none yet, or not
+    /// of working age). Chosen by the person from observed wages — there is no
+    /// planner assigning labour.
+    pub sector: Vec<u8>,
+    /// Index of the person's (one tracked) parent, or `NO_PARENT`. Kin
+    /// provisioning — parents feeding their own children — is a human
+    /// universal (Kaplan 1996), modelled as biology, not as a policy.
+    pub parent: Vec<usize>,
     // Heritable psychology in [0,1].
     pub patience: Vec<f64>,
     pub risk_aversion: Vec<f64>,
@@ -35,6 +43,11 @@ pub struct People {
     /// Subjective well-being EMA in [0,1] (measured, never set).
     pub wellbeing: Vec<f64>,
 }
+
+/// Sentinel: no current job.
+pub const NO_JOB: u8 = u8::MAX;
+/// Sentinel: no tracked parent (the seed generation).
+pub const NO_PARENT: usize = usize::MAX;
 
 impl People {
     pub fn len(&self) -> usize {
@@ -73,6 +86,7 @@ impl People {
                 // Seed adults across the working-age range so the first
                 // generation doesn't die or reproduce all at once.
                 rng.below(40) as u32 + 15,
+                NO_PARENT,
             );
         }
         p
@@ -87,6 +101,7 @@ impl People {
         skill: f64,
         psyche: [f64; 4],
         age: u32,
+        parent: usize,
     ) -> usize {
         let id = self.alive.len();
         self.alive.push(true);
@@ -96,6 +111,8 @@ impl People {
         self.wealth.push(wealth);
         self.skill.push(skill.max(0.5));
         self.deprivation.push(0.0);
+        self.sector.push(NO_JOB);
+        self.parent.push(parent);
         self.patience.push(psyche[0]);
         self.risk_aversion.push(psyche[1]);
         self.fairness.push(psyche[2]);
@@ -126,7 +143,12 @@ impl People {
         if self.age[i] < 5 {
             h += INFANT_HAZARD;
         }
-        h += DEPRIVATION_HAZARD * self.deprivation[i].min(2.0);
+        // Nonlinear in severity: mild chronic shortfall stunts rather than
+        // kills; mortality climbs steeply only as deprivation deepens (famine
+        // demography: excess deaths concentrate in severe episodes — Ó Gráda
+        // 2007).
+        let d = self.deprivation[i].min(2.0);
+        h += DEPRIVATION_HAZARD * d * d / 2.0;
         if local_temp > HEAT_STRESS_TEMP {
             h += HEAT_STRESS_HAZARD * (local_temp - HEAT_STRESS_TEMP);
         }
@@ -175,9 +197,9 @@ mod tests {
     #[test]
     fn mortality_has_the_gompertz_shape() {
         let mut p = People::default();
-        p.push(0, 0, 1.0, 1.0, [0.5; 4], 0);
-        p.push(0, 0, 1.0, 1.0, [0.5; 4], 30);
-        p.push(0, 0, 1.0, 1.0, [0.5; 4], 80);
+        p.push(0, 0, 1.0, 1.0, [0.5; 4], 0, NO_PARENT);
+        p.push(0, 0, 1.0, 1.0, [0.5; 4], 30, NO_PARENT);
+        p.push(0, 0, 1.0, 1.0, [0.5; 4], 80, NO_PARENT);
         let h_inf = p.mortality_hazard(0, COMFORT_TEMP);
         let h_adult = p.mortality_hazard(1, COMFORT_TEMP);
         let h_old = p.mortality_hazard(2, COMFORT_TEMP);
@@ -189,7 +211,7 @@ mod tests {
     #[test]
     fn deprivation_and_heat_raise_hazard() {
         let mut p = People::default();
-        p.push(0, 0, 1.0, 1.0, [0.5; 4], 30);
+        p.push(0, 0, 1.0, 1.0, [0.5; 4], 30, NO_PARENT);
         let base = p.mortality_hazard(0, COMFORT_TEMP);
         p.deprivation[0] = 1.0;
         assert!(p.mortality_hazard(0, COMFORT_TEMP) > base, "starvation kills");
@@ -203,8 +225,8 @@ mod tests {
     #[test]
     fn need_rises_in_the_cold_and_with_adulthood() {
         let mut p = People::default();
-        p.push(0, 0, 1.0, 1.0, [0.5; 4], 30);
-        p.push(0, 0, 1.0, 1.0, [0.5; 4], 2);
+        p.push(0, 0, 1.0, 1.0, [0.5; 4], 30, NO_PARENT);
+        p.push(0, 0, 1.0, 1.0, [0.5; 4], 2, NO_PARENT);
         let warm = p.need(0, COMFORT_TEMP);
         let cold = p.need(0, COMFORT_TEMP - 20.0);
         assert!(cold.fuel > warm.fuel, "cold demands heating fuel");

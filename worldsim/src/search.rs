@@ -13,6 +13,7 @@
 //! resampling on the regimes. Fully deterministic for a given seed.
 
 use crate::config::*;
+use crate::measure::Objective;
 use crate::rng::Rng;
 use crate::world::World;
 
@@ -42,6 +43,9 @@ pub struct SearchConfig {
     pub generations: usize,
     /// RNG seed for the *search* (distinct from world seeds).
     pub search_seed: u64,
+    /// The evaluator's values — the welfare weights the search maximises. An
+    /// explicit input: a different objective finds a different "best" society.
+    pub objective: Objective,
 }
 
 impl Default for SearchConfig {
@@ -61,6 +65,7 @@ impl Default for SearchConfig {
             lambda: 18,
             generations: 12,
             search_seed: 0xC0FFEE,
+            objective: Objective::default(),
         }
     }
 }
@@ -85,7 +90,7 @@ pub fn evaluate(params: &SocietyParams, cfg: &SearchConfig) -> f64 {
         let window = cfg.eval_window.max(1);
         for _ in 0..window {
             w.step();
-            acc += w.measure().welfare(init_pop);
+            acc += w.measure().welfare_with(init_pop, &cfg.objective);
         }
         total += acc / window as f64;
     }

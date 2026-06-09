@@ -9,7 +9,7 @@
 //! ```
 
 use worldsim::config::{Scenario, WorldConfig};
-use worldsim::measure::Measurements;
+use worldsim::measure::{Measurements, Objective};
 use worldsim::search::{self, SearchConfig};
 use worldsim::society;
 use worldsim::world::World;
@@ -67,7 +67,23 @@ fn cmd_list() -> i32 {
     println!("  [society]  property, tax-rate, tax-progressivity, transfer, *-share, carbon-price, governance, ...");
     println!("  [society N]  per-polity overrides");
     println!("\nThe hard rule: there is NO key for any social outcome (gdp, gini, temperature...).");
+    println!("\nObjectives (the evaluator's VALUES, use with compare/search --objective NAME):");
+    for name in Objective::PRESETS {
+        println!("  {name}");
+    }
+    println!("  (balanced weights all four welfare pillars equally; others tilt the value judgement)");
     0
+}
+
+/// Resolve an --objective name to its weights (default balanced).
+fn resolve_objective(name: &Option<String>) -> Result<Objective, i32> {
+    match name {
+        None => Ok(Objective::default()),
+        Some(n) => Objective::preset(n).ok_or_else(|| {
+            eprintln!("unknown objective: {n}\navailable: {}", Objective::PRESETS.join(", "));
+            2
+        }),
+    }
 }
 
 /// Resolve `--archetype`/`--file` plus planet overrides into a scenario.
@@ -256,12 +272,18 @@ fn cmd_compare(args: &[String]) -> i32 {
     let mut years = 200usize;
     let mut seeds = vec![1u64, 2, 3];
     let mut agents = None;
+    let mut objective_name: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--archetype" | "-a" => {
                 let Some(v) = args.get(i + 1) else { return ae("--archetype needs a value"); };
                 names.push(v.clone());
+                i += 2;
+            }
+            "--objective" | "-o" => {
+                let Some(v) = args.get(i + 1) else { return ae("--objective needs a value"); };
+                objective_name = Some(v.clone());
                 i += 2;
             }
             "--years" | "-y" => {
@@ -287,10 +309,15 @@ fn cmd_compare(args: &[String]) -> i32 {
     if names.len() < 2 {
         return ae("compare needs at least two --archetype NAME arguments");
     }
+    let objective = match resolve_objective(&objective_name) {
+        Ok(o) => o,
+        Err(c) => return c,
+    };
     println!(
-        "comparing {} on the same planet ({} seeds x {years} years), ranked by measured welfare:\n",
+        "comparing {} on the same planet ({} seeds x {years} years), ranked by measured welfare\n         under the '{}' objective:\n",
         names.join(" vs "),
-        seeds.len()
+        seeds.len(),
+        objective_name.as_deref().unwrap_or("balanced")
     );
     println!("  {:<22} {:>8} {:>7} {:>7} {:>6} {:>6} {:>6}", "archetype", "welfare", "pop", "gini", "wellb", "T+", "biodiv");
     println!("  {}", "-".repeat(70));
@@ -317,7 +344,7 @@ fn cmd_compare(args: &[String]) -> i32 {
             }
             for _ in 0..window {
                 w.step();
-                acc += w.measure().welfare(init);
+                acc += w.measure().welfare_with(init, &objective);
             }
             welfare_sum += acc / window as f64;
             last = Some(w.measure());
@@ -338,6 +365,7 @@ fn cmd_compare(args: &[String]) -> i32 {
 
 fn cmd_search(args: &[String]) -> i32 {
     let mut cfg = SearchConfig::default();
+    let mut objective_name = "balanced".to_string();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -376,6 +404,15 @@ fn cmd_search(args: &[String]) -> i32 {
                 cfg.lambda = n;
                 i += 2;
             }
+            "--objective" | "-o" => {
+                let Some(v) = args.get(i + 1) else { return ae("--objective needs a value"); };
+                match Objective::preset(v) {
+                    Some(o) => cfg.objective = o,
+                    None => return ae(&format!("unknown objective '{v}' (one of: {})", Objective::PRESETS.join(", "))),
+                }
+                objective_name = v.clone();
+                i += 2;
+            }
             other => return ae(&format!("unknown argument: {other}")),
         }
     }
@@ -386,6 +423,7 @@ fn cmd_search(args: &[String]) -> i32 {
         cfg.world.nlon, cfg.world.nlat, cfg.world.n_agents,
         cfg.seeds.len(), cfg.years, cfg.generations, cfg.mu, cfg.lambda
     );
+    println!("  objective: {objective_name} (the evaluator's values)");
     println!("  null-society (do-nothing) baseline welfare: {baseline:.4}\n");
     let pop = search::search(&cfg);
     let best = &pop[0];

@@ -71,18 +71,28 @@ pub struct Economy {
     pub output: [f64; Sector::N],
     /// Emergent price per sector (numéraire per unit; food = 1 by definition).
     pub price: [f64; Sector::N],
+    /// **Observed wage** per unit of effective labour in each sector last year
+    /// (the worker's payout per skill-unit). This is the *information signal*
+    /// workers reallocate on — people follow last year's wages (classic cobweb
+    /// dynamics; Ezekiel 1938; Hayek: prices/wages carry the knowledge).
+    /// Emergent: revenue ÷ labour, never set.
+    pub last_wage: [f64; Sector::N],
+    /// Effective labour employed in each sector this year (measured).
+    pub labour: [f64; Sector::N],
     /// Treasury: collected revenue awaiting allocation (numéraire).
     pub treasury: f64,
 }
 
 /// Base labour productivity: numéraire units one effective worker-year yields
-/// at unit capital and unit resource access (one farmer feeds several people;
-/// FAO labour-productivity scale). Output is constant-returns in labour at the
-/// margin — the *diminishing* returns and the carrying-capacity ceiling come
-/// from the finite resource each sector draws on (handled in `World`), not from
-/// a sublinear labour exponent, which would make per-capita output vanish as a
-/// population grows.
-pub const BASE_YIELD: f64 = 12.0;
+/// at unit capital and unit resource access. The numéraire is one adult-year of
+/// food, and a pre-modern agricultural worker fed roughly 3–5 people including
+/// themselves (Allen 2000; Clark 2007, agricultural labour productivity before
+/// 1800); with capital deepening and learning the effective figure grows, as it
+/// did historically. Output is constant-returns in labour at the margin — the
+/// *diminishing* returns and the carrying-capacity ceiling come from the finite
+/// resource each sector draws on (in `World`), not from a sublinear labour
+/// exponent, which would make per-capita output vanish as a population grows.
+pub const BASE_YIELD: f64 = 5.0;
 
 impl Default for Economy {
     fn default() -> Economy {
@@ -95,6 +105,8 @@ impl Default for Economy {
             cumulative: [1.0; Sector::N],
             output: [0.0; Sector::N],
             price: [1.0; Sector::N],
+            last_wage: [1.0; Sector::N],
+            labour: [0.0; Sector::N],
             treasury: 0.0,
         }
     }
