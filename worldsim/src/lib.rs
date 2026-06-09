@@ -53,6 +53,7 @@ pub mod economy;
 pub mod measure;
 pub mod people;
 pub mod planet;
+pub mod render;
 pub mod rng;
 pub mod search;
 pub mod society;

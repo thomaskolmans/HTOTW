@@ -24,6 +24,8 @@ fn dispatch(args: &[String]) -> i32 {
         Some("compare") => cmd_compare(&args[1..]),
         Some("search") => cmd_search(&args[1..]),
         Some("calibrate") => cmd_calibrate(&args[1..]),
+        Some("map") => cmd_map(&args[1..]),
+        Some("trace") => cmd_trace(&args[1..]),
         Some("list") => cmd_list(),
         Some("help") | Some("--help") | Some("-h") | None => {
             print_help();
@@ -52,6 +54,8 @@ fn print_help() {
          \x20 worldsim search  [--years N] [--seeds 1,2,3] [--generations G] [--agents N] [--objective NAME]\n\
          \x20 worldsim calibrate [--samples N] [--refine N] [--years N] [--seeds 1,2,3]\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 # fit the PRIMITIVES so measured moments match documented reality (MSM)\n\
+         \x20 worldsim map   [--archetype NAME | --file PATH] [--layer geo|temp|bio|pop] [--years N]\n\
+         \x20 worldsim trace [--archetype NAME | --file PATH] [--years N] [--csv PATH]\n\
          \x20 worldsim list\n\
          \x20 worldsim help\n\
          \n\
@@ -533,6 +537,101 @@ fn cmd_calibrate(args: &[String]) -> i32 {
     0
 }
 
+/// `worldsim map` — run the world, then paint an ASCII world map of a chosen
+/// per-cell layer (geography, temperature, biomass, or population density) so
+/// the emergent planet is legible. Read-only.
+fn cmd_map(args: &[String]) -> i32 {
+    use worldsim::render::{render_map, MapLayer};
+    let mut archetype = None;
+    let mut file = None;
+    let mut years = 200usize;
+    let mut layer = MapLayer::Population;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--archetype" | "-a" => { let Some(v) = args.get(i+1) else { return ae("--archetype needs a value"); }; archetype = Some(v.clone()); i += 2; }
+            "--file" | "-f" => { let Some(v) = args.get(i+1) else { return ae("--file needs a value"); }; file = Some(v.clone()); i += 2; }
+            "--years" | "-y" => { let Some(v) = args.get(i+1) else { return ae("--years needs a value"); }; let Ok(n) = v.parse() else { return ae("invalid --years"); }; years = n; i += 2; }
+            "--layer" | "-l" => {
+                let Some(v) = args.get(i+1) else { return ae("--layer needs a value"); };
+                match MapLayer::parse(v) { Some(l) => layer = l, None => return ae("layer must be geo|temp|bio|pop") }
+                i += 2;
+            }
+            other => return ae(&format!("unknown argument: {other}")),
+        }
+    }
+    let scenario = match load_scenario(&archetype, &file, None, None, None, None) {
+        Ok(s) => s, Err(c) => return c,
+    };
+    let mut w = World::from_scenario(&scenario);
+    for _ in 0..years { w.step(); }
+    let m = w.measure();
+    println!(
+        "world '{}' after {years} years — layer: {:?}\n  pop {}  warming {:.2}K  biodiversity {:.2}\n",
+        scenario.name, layer, m.population, m.temp_anomaly, m.biodiversity
+    );
+    print!("{}", render_map(&w, layer));
+    println!("\n  (~ ocean; ramp ' .:-=+*#%@' low→high; map is north-up)");
+    0
+}
+
+/// `worldsim trace` — run the world and emit the global emergent time-series as
+/// CSV (stable header), or print headline sparklines if no --csv is given.
+fn cmd_trace(args: &[String]) -> i32 {
+    use worldsim::render::{sparkline, trace_row, TRACE_HEADER};
+    let mut archetype = None;
+    let mut file = None;
+    let mut years = 250usize;
+    let mut csv: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--archetype" | "-a" => { let Some(v) = args.get(i+1) else { return ae("--archetype needs a value"); }; archetype = Some(v.clone()); i += 2; }
+            "--file" | "-f" => { let Some(v) = args.get(i+1) else { return ae("--file needs a value"); }; file = Some(v.clone()); i += 2; }
+            "--years" | "-y" => { let Some(v) = args.get(i+1) else { return ae("--years needs a value"); }; let Ok(n) = v.parse() else { return ae("invalid --years"); }; years = n; i += 2; }
+            "--csv" => { let Some(v) = args.get(i+1) else { return ae("--csv needs a value"); }; csv = Some(v.clone()); i += 2; }
+            other => return ae(&format!("unknown argument: {other}")),
+        }
+    }
+    let scenario = match load_scenario(&archetype, &file, None, None, None, None) {
+        Ok(s) => s, Err(c) => return c,
+    };
+    let mut w = World::from_scenario(&scenario);
+    let mut rows = vec![trace_row(&w.measure())];
+    let mut series: Vec<Measurements> = vec![w.measure()];
+    for _ in 0..years {
+        w.step();
+        rows.push(trace_row(&w.measure()));
+        series.push(w.measure());
+    }
+    match csv {
+        Some(path) => {
+            let body = format!("{TRACE_HEADER}\n{}\n", rows.join("\n"));
+            match std::fs::write(&path, body) {
+                Ok(()) => { println!("wrote {} rows to {path}", rows.len()); 0 }
+                Err(e) => { eprintln!("failed to write {path}: {e}"); 1 }
+            }
+        }
+        None => {
+            let col = |f: fn(&Measurements) -> f64| series.iter().map(f).collect::<Vec<_>>();
+            println!("world '{}' — {years} years of emergent history:\n", scenario.name);
+            println!("  population     {}", sparkline(&col(|m| m.population as f64)));
+            println!("  gdp/capita     {}", sparkline(&col(|m| m.gdp_per_capita)));
+            println!("  wealth gini    {}", sparkline(&col(|m| m.wealth_gini)));
+            println!("  wellbeing      {}", sparkline(&col(|m| m.wellbeing)));
+            println!("  warming (K)    {}", sparkline(&col(|m| m.temp_anomaly)));
+            println!("  clean share    {}", sparkline(&col(|m| m.clean_share)));
+            println!("  biodiversity   {}", sparkline(&col(|m| m.biodiversity)));
+            let last = series.last().unwrap();
+            println!(
+                "\n  final: pop {}  gini {:.2}  warming {:.2}K  biodiversity {:.2}",
+                last.population, last.wealth_gini, last.temp_anomaly, last.biodiversity
+            );
+            0
+        }
+    }
+}
+
 fn ae(msg: &str) -> i32 {
     eprintln!("{msg}");
     2
@@ -605,7 +704,41 @@ mod tests {
     }
 
     #[test]
+    fn calibrate_runs_small() {
+        assert_eq!(
+            cmd_calibrate(&mk(&["--samples", "4", "--refine", "2", "--years", "30", "--seeds", "1", "--agents", "400"])),
+            0
+        );
+        assert_eq!(cmd_calibrate(&mk(&["--samples", "x"])), 2);
+    }
+
+    #[test]
+    fn map_and_trace_commands() {
+        for layer in ["geo", "temp", "bio", "pop"] {
+            assert_eq!(cmd_map(&mk(&["--file", &tiny_world_file(), "--layer", layer, "--years", "10"])), 0);
+        }
+        assert_eq!(cmd_map(&mk(&["--file", &tiny_world_file(), "--layer", "bogus"])), 2);
+        // Trace to stdout (sparklines) and to CSV.
+        assert_eq!(cmd_trace(&mk(&["--file", &tiny_world_file(), "--years", "15"])), 0);
+        let p = std::env::temp_dir().join("worldsim_trace.csv");
+        assert_eq!(cmd_trace(&mk(&["--file", &tiny_world_file(), "--years", "10", "--csv", p.to_str().unwrap()])), 0);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.starts_with("year,population,"));
+        assert_eq!(body.lines().count(), 12); // header + 11 rows (0..=10)
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(cmd_trace(&mk(&["--csv", "/no/such/dir/x.csv", "--file", &tiny_world_file(), "--years", "3"])), 1);
+    }
+
+    fn tiny_world_file() -> String {
+        let p = std::env::temp_dir().join("worldsim_tiny.world");
+        std::fs::write(&p, "name = tiny\n[world]\ngrid-lon = 24\ngrid-lat = 12\npopulation = 500\n").unwrap();
+        p.to_str().unwrap().to_string()
+    }
+
+    #[test]
     fn dispatch_routes() {
         assert_eq!(dispatch(&mk(&["run", "--years", "10", "--agents", "400", "--grid-lon", "24", "--grid-lat", "12"])), 0);
+        assert_eq!(dispatch(&mk(&["map", "--file", &tiny_world_file(), "--years", "5"])), 0);
+        assert_eq!(dispatch(&mk(&["trace", "--file", &tiny_world_file(), "--years", "5"])), 0);
     }
 }
