@@ -26,6 +26,7 @@ fn dispatch(args: &[String]) -> i32 {
         Some("calibrate") => cmd_calibrate(&args[1..]),
         Some("map") => cmd_map(&args[1..]),
         Some("trace") => cmd_trace(&args[1..]),
+        Some("whatif") => cmd_whatif(&args[1..]),
         Some("list") => cmd_list(),
         Some("help") | Some("--help") | Some("-h") | None => {
             print_help();
@@ -56,6 +57,8 @@ fn print_help() {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 # fit the PRIMITIVES so measured moments match documented reality (MSM)\n\
          \x20 worldsim map   [--archetype NAME | --file PATH] [--layer geo|temp|bio|pop] [--years N]\n\
          \x20 worldsim trace [--archetype NAME | --file PATH] [--years N] [--csv PATH]\n\
+         \x20 worldsim whatif [--archetype NAME | --file PATH] --set key=value ... [--years N] [--seeds 1,2,3]\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 # mass-do/undo laws on a society and measure the same-seed delta\n\
          \x20 worldsim list\n\
          \x20 worldsim help\n\
          \n\
@@ -632,6 +635,116 @@ fn cmd_trace(args: &[String]) -> i32 {
     }
 }
 
+/// `worldsim whatif` — the planetary counterfactual: take a society, apply one
+/// or more `--set key=value` law edits (mass-do or undo any institution), and
+/// run the BASE and the EDITED society on the *same seeds and the same planet*,
+/// so every measured difference is attributable to the edits and nothing else.
+/// This is "input an existing society and see how the world would work if you
+/// changed its laws", at full scale.
+fn cmd_whatif(args: &[String]) -> i32 {
+    use worldsim::config::apply_society_edit;
+    let mut archetype = None;
+    let mut file = None;
+    let mut years = 250usize;
+    let mut seeds = vec![1u64, 2, 3];
+    let mut edits: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--archetype" | "-a" => { let Some(v) = args.get(i+1) else { return ae("--archetype needs a value"); }; archetype = Some(v.clone()); i += 2; }
+            "--file" | "-f" => { let Some(v) = args.get(i+1) else { return ae("--file needs a value"); }; file = Some(v.clone()); i += 2; }
+            "--years" | "-y" => { let Some(v) = args.get(i+1) else { return ae("--years needs a value"); }; let Ok(n) = v.parse() else { return ae("invalid --years"); }; years = n; i += 2; }
+            "--seeds" => { let Some(v) = args.get(i+1) else { return ae("--seeds needs a value"); }; match parse_seeds(v) { Ok(x) => seeds = x, Err(e) => return ae(&e) } i += 2; }
+            "--set" => {
+                let Some(v) = args.get(i+1) else { return ae("--set needs key=value"); };
+                let Some((k, val)) = v.split_once('=') else { return ae(&format!("--set wants key=value, got '{v}'")); };
+                edits.push((k.trim().to_string(), val.trim().to_string()));
+                i += 2;
+            }
+            other => return ae(&format!("unknown argument: {other}")),
+        }
+    }
+    if edits.is_empty() {
+        return ae("whatif needs at least one --set key=value edit");
+    }
+    let base = match load_scenario(&archetype, &file, None, None, None, None) {
+        Ok(s) => s, Err(c) => return c,
+    };
+    // Build the edited scenario by applying every edit to every polity.
+    let mut edited = base.clone();
+    edited.name = format!("{} (edited)", base.name);
+    for soc in &mut edited.societies {
+        for (k, v) in &edits {
+            if let Err(e) = apply_society_edit(soc, k, v) {
+                return ae(&format!("bad --set {k}={v}: {e}"));
+            }
+        }
+    }
+
+    // Run both on the same seeds; average the final-window measurements.
+    let eval = |scenario: &Scenario| -> (Measurements, f64) {
+        let window = 30.min(years);
+        let mut sums = [0.0_f64; 7];
+        let mut welfare = 0.0;
+        let mut last = None;
+        for &seed in &seeds {
+            let mut sc = scenario.clone();
+            sc.world.seed = seed;
+            let mut w = World::from_scenario(&sc);
+            let init = w.initial_population;
+            for _ in 0..years.saturating_sub(window) { w.step(); }
+            let mut acc = [0.0_f64; 7];
+            let mut wf = 0.0;
+            for _ in 0..window {
+                w.step();
+                let m = w.measure();
+                acc[0] += m.population as f64;
+                acc[1] += m.wealth_gini;
+                acc[2] += m.wellbeing;
+                acc[3] += m.temp_anomaly;
+                acc[4] += m.biodiversity;
+                acc[5] += m.gdp_per_capita;
+                acc[6] += m.deprivation_rate;
+                wf += m.welfare(init);
+            }
+            for k in 0..7 { sums[k] += acc[k] / window as f64; }
+            welfare += wf / window as f64;
+            last = Some(w.measure());
+        }
+        let n = seeds.len() as f64;
+        let mut m = last.unwrap();
+        m.population = (sums[0] / n) as usize;
+        m.wealth_gini = sums[1] / n;
+        m.wellbeing = sums[2] / n;
+        m.temp_anomaly = sums[3] / n;
+        m.biodiversity = sums[4] / n;
+        m.gdp_per_capita = sums[5] / n;
+        m.deprivation_rate = sums[6] / n;
+        (m, welfare / n)
+    };
+
+    let (mb, wb) = eval(&base);
+    let (me, we) = eval(&edited);
+    println!("what-if on '{}' ({} seeds x {years} years, same planet in both arms):", base.name, seeds.len());
+    println!("  edits: {}", edits.iter().map(|(k,v)| format!("{k}={v}")).collect::<Vec<_>>().join(", "));
+    println!("\n  {:<16} {:>10} {:>10} {:>10}", "metric", "base", "edited", "delta");
+    println!("  {}", "-".repeat(50));
+    let row = |label: &str, a: f64, b: f64| println!("  {label:<16} {a:>10.3} {b:>10.3} {:>+10.3}", b - a);
+    row("welfare", wb, we);
+    row("population", mb.population as f64, me.population as f64);
+    row("gdp/capita", mb.gdp_per_capita, me.gdp_per_capita);
+    row("wealth gini", mb.wealth_gini, me.wealth_gini);
+    row("wellbeing", mb.wellbeing, me.wellbeing);
+    row("warming (K)", mb.temp_anomaly, me.temp_anomaly);
+    row("biodiversity", mb.biodiversity, me.biodiversity);
+    row("deprivation", mb.deprivation_rate, me.deprivation_rate);
+    let verdict = if we > wb { "the EDITED society scores higher measured welfare" }
+        else if wb > we { "the society as-is scores higher measured welfare" }
+        else { "a tie on measured welfare" };
+    println!("\n  verdict: {verdict}");
+    0
+}
+
 fn ae(msg: &str) -> i32 {
     eprintln!("{msg}");
     2
@@ -736,9 +849,27 @@ mod tests {
     }
 
     #[test]
+    fn whatif_counterfactual() {
+        // Apply a redistribution edit to a society and measure the delta.
+        assert_eq!(
+            cmd_whatif(&mk(&[
+                "--file", &tiny_world_file(), "--set", "tax-rate=0.3",
+                "--set", "transfer=floor", "--years", "40", "--seeds", "1,2",
+            ])),
+            0
+        );
+        // Errors.
+        assert_eq!(cmd_whatif(&mk(&["--file", &tiny_world_file()])), 2); // no edits
+        assert_eq!(cmd_whatif(&mk(&["--file", &tiny_world_file(), "--set", "tax-rate"])), 2); // no =
+        assert_eq!(cmd_whatif(&mk(&["--file", &tiny_world_file(), "--set", "gdp=5"])), 2); // outcome key
+        assert_eq!(cmd_whatif(&mk(&["--set", "tax-rate=0.1", "--archetype", "atlantis"])), 2);
+    }
+
+    #[test]
     fn dispatch_routes() {
         assert_eq!(dispatch(&mk(&["run", "--years", "10", "--agents", "400", "--grid-lon", "24", "--grid-lat", "12"])), 0);
         assert_eq!(dispatch(&mk(&["map", "--file", &tiny_world_file(), "--years", "5"])), 0);
         assert_eq!(dispatch(&mk(&["trace", "--file", &tiny_world_file(), "--years", "5"])), 0);
+        assert_eq!(dispatch(&mk(&["whatif", "--file", &tiny_world_file(), "--set", "carbon-price=3", "--years", "20", "--seeds", "1"])), 0);
     }
 }

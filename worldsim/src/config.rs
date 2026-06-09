@@ -318,6 +318,14 @@ fn set_world_key(w: &mut WorldConfig, key: &str, value: &str) -> Result<(), Stri
     Ok(())
 }
 
+/// Apply one `key = value` edit to a [`SocietyParams`] (the same strict mapping
+/// the `.world` parser uses). Public so the counterfactual `whatif` tool can
+/// mass-do/undo individual laws on a society. Outcome keys do not exist, so an
+/// edit can only ever move a mechanism.
+pub fn apply_society_edit(s: &mut SocietyParams, key: &str, value: &str) -> Result<(), String> {
+    set_society_key(s, key, value)
+}
+
 fn set_society_key(s: &mut SocietyParams, key: &str, value: &str) -> Result<(), String> {
     let frac = |key: &str, value: &str| -> Result<f64, String> {
         let v: f64 = num(key, value)?;

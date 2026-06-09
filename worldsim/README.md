@@ -74,6 +74,8 @@ cargo run --release -p worldsim -- compare --archetype laissez-faire \
     --archetype degrowth-commons --objective green --years 250
 cargo run --release -p worldsim -- search --objective balanced --years 150
 cargo run --release -p worldsim -- calibrate          # fit primitives to documented reality
+cargo run --release -p worldsim -- whatif --archetype laissez-faire --set carbon-price=8
+cargo run --release -p worldsim -- map --layer biomass --archetype degrowth-commons
 cargo run --release -p worldsim -- list
 ```
 
