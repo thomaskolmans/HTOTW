@@ -51,6 +51,23 @@ pub struct World {
     pub legitimacy: Vec<f64>,
     /// Biomass fuel gathered this year per polity (the wood channel; measured).
     pub wood_this_year: Vec<f64>,
+    /// Per-polity demand recorded by the economy for the tradeable categories
+    /// `[food, energy, materials, goods]` (read by the trade phase).
+    needs_this_year: Vec<[f64; 4]>,
+    /// Energy imported this year per polity (consumed alongside local output).
+    energy_imports: Vec<f64>,
+    /// Which polity pairs share a border (trade gravity & war geometry).
+    adjacency: Vec<(usize, usize)>,
+    /// Pandemic state: years of elevated disease hazard remaining.
+    pandemic_years_left: u32,
+    /// Cumulative measured demography ledgers (for rate instruments).
+    pub births_total: u64,
+    pub child_deaths_total: u64,
+    pub fertile_years_total: f64,
+    /// Cumulative measured event counters.
+    pub pandemics_total: u64,
+    pub wars_total: u64,
+    pub war_deaths_total: u64,
 
     pub initial_population: usize,
     pub death_age_sum: f64,
@@ -109,6 +126,29 @@ impl World {
             }
         }
 
+        // Polity adjacency: pairs whose territories touch on the grid (war and
+        // trade geometry).
+        let mut adjacency: Vec<(usize, usize)> = Vec::new();
+        {
+            let mut seen = std::collections::HashSet::new();
+            for c in 0..planet.cells() {
+                let a = polity_of_cell[c];
+                if a == UNOWNED {
+                    continue;
+                }
+                for nb in planet.neighbors(c) {
+                    let b = polity_of_cell[nb];
+                    if b != UNOWNED && b != a {
+                        let key = (a.min(b) as usize, a.max(b) as usize);
+                        if seen.insert(key) {
+                            adjacency.push(key);
+                        }
+                    }
+                }
+            }
+            adjacency.sort_unstable();
+        }
+
         // Habitable cells: land with positive productivity. People seed there.
         let habitable: Vec<usize> =
             land.iter().copied().filter(|&i| planet.npp0[i] > 0.05).collect();
@@ -123,13 +163,27 @@ impl World {
             cfg: cfg.clone(),
             planet,
             people,
-            econ: vec![Economy::default(); n_polities],
+            econ: {
+                let mut e = Economy::default();
+                e.base_yield = cfg.base_yield;
+                vec![e; n_polities]
+            },
             society: scenario.societies.clone(),
             rng,
             polity_of_cell,
             polity_cells,
             legitimacy: vec![0.5; n_polities],
             wood_this_year: vec![0.0; n_polities],
+            needs_this_year: vec![[0.0; 4]; n_polities],
+            energy_imports: vec![0.0; n_polities],
+            adjacency,
+            pandemic_years_left: 0,
+            births_total: 0,
+            child_deaths_total: 0,
+            fertile_years_total: 0.0,
+            pandemics_total: 0,
+            wars_total: 0,
+            war_deaths_total: 0,
             initial_population,
             death_age_sum: 0.0,
             death_count: 0,
@@ -164,14 +218,25 @@ impl World {
             self.run_economy(p, &members[p], &mut income);
         }
 
+        // World trade: surplus regions ship to deficit regions (value-balanced
+        // multilateral exchange with iceberg transport losses).
+        self.trade();
+
         // Consumption, well-being and deprivation (needs the local temperature).
         for p in 0..n_polities {
             self.consume_polity(p, &members[p], &income);
         }
 
+        // Pandemic arrival travels the trade network (before this year's
+        // mortality is drawn).
+        self.update_pandemic(&members);
+
         // Vital events and migration draw on the shared RNG stream.
         self.vital_events(&members);
         self.migration(&members);
+
+        // War: scarcity-driven, trade-tempered conflict between neighbours.
+        self.conflict(&members);
 
         // Integrate the physical planet under this year's pressures.
         self.planet.step();
@@ -260,7 +325,7 @@ impl World {
                     (1.0 - CAPITAL_ELASTICITY)
                         * econ.price[k]
                         * econ.productivity[k]
-                        * crate::economy::BASE_YIELD
+                        * econ.base_yield
                         * econ.capital[k].powf(CAPITAL_ELASTICITY)
                 };
             }
@@ -331,6 +396,7 @@ impl World {
 
         // Industrial energy demand on top of the remaining heating gap.
         let energy_need = fuel_gap + 0.5 * (need_goods + need_water);
+        self.needs_this_year[p] = [need_food, energy_need, need_goods, need_goods];
 
         // Production: effort = A·BASE_YIELD·K^α·L, passed through a saturating
         // utilization against demand and ceilinged by the finite resource —
@@ -368,9 +434,14 @@ impl World {
 
         econ.update_price(Sector::Food, need_food, food);
         econ.update_price(Sector::Water, need_water, water);
-        let energy_out = (fossil + clean).max(1e-9);
-        econ.update_price(Sector::FossilFuel, energy_need * fossil / energy_out, fossil + 1e-6);
-        econ.update_price(Sector::CleanEnergy, energy_need * clean / energy_out, clean + 1e-6);
+        // Energy is ONE good with ONE market price, whoever produced it: when
+        // a carbon levy squeezes fossil supply, the energy price rises, and
+        // that price is precisely the signal that makes immature clean energy
+        // worth a worker's while (then the learning curve does the rest). Two
+        // separate prices would mute the substitution that drives the real
+        // transition.
+        econ.update_price(Sector::FossilFuel, energy_need, fossil + clean + 1e-6);
+        econ.price[Sector::CleanEnergy.index()] = econ.price[Sector::FossilFuel.index()];
         econ.update_price(Sector::Materials, need_goods, materials + 1e-6);
         econ.update_price(Sector::Goods, need_goods, goods);
 
@@ -548,6 +619,30 @@ impl World {
         let enforce = treasury * shares[3];
         let transfer_budget = treasury - edu - infra - research - enforce;
 
+        // **Public spending is public employment**: the budgets pay the people
+        // who teach, build, research and police — distributed as income by
+        // human capital among the working-age. Without this the treasury is a
+        // monetary black hole: taxes leave households, the services appear,
+        // but no teacher is ever paid and taxed parents cannot feed their
+        // children (the model's own version of austerity-by-accounting-error).
+        // The *effects* of the spending (skill, capital, productivity,
+        // capacity) are delivered below; this is the matching income flow.
+        let public_wages = edu + infra + research + enforce;
+        if public_wages > 0.0 {
+            let working: f64 = members
+                .iter()
+                .filter(|&&i| (15..70).contains(&self.people.age[i]))
+                .map(|&i| self.people.skill[i])
+                .sum();
+            if working > 0.0 {
+                for &i in members {
+                    if (15..70).contains(&self.people.age[i]) {
+                        income[i] += public_wages * self.people.skill[i] / working;
+                    }
+                }
+            }
+        }
+
         // Education raises human capital (children benefit most).
         if edu > 0.0 {
             let per = edu / members.len() as f64;
@@ -641,8 +736,9 @@ impl World {
         // rest); coverage of the gap by the Water sector:
         let avail_water_market = ratio(econ.output[Sector::Water.index()], dem_water).min(1.0);
         // Heating fuel was gathered as wood first; market energy covers the rest.
-        let energy_supply =
-            econ.output[Sector::FossilFuel.index()] + econ.output[Sector::CleanEnergy.index()];
+        let energy_supply = econ.output[Sector::FossilFuel.index()]
+            + econ.output[Sector::CleanEnergy.index()]
+            + self.energy_imports[p];
         let avail_fuel =
             ratio(self.wood_this_year[p] + energy_supply, dem_fuel + 0.5 * (dem_goods + dem_water))
                 .min(1.0);
@@ -741,20 +837,207 @@ impl World {
     }
 
 
+    /// **World trade**: for each tradeable category (food, energy, materials,
+    /// goods), polities with a surplus over domestic need export and polities
+    /// in deficit import, scaled by each side's `trade_openness` and subject to
+    /// an iceberg transport loss (Samuelson 1954). Imports are **value-capped
+    /// by exports** — a polity pays for what it brings in with what it ships
+    /// out (balanced multilateral exchange, no credit) — so trade is a real
+    /// exchange, not a gift. Comparative advantage emerges: the fertile feed
+    /// the mineral-rich and vice versa.
+    fn trade(&mut self) {
+        let n = self.econ.len();
+        if n < 2 {
+            return;
+        }
+        // Category k -> (per-polity exportable, per-polity want, world price).
+        let mut exportable = vec![[0.0_f64; 4]; n];
+        let mut want = vec![[0.0_f64; 4]; n];
+        let mut world_price = [0.0_f64; 4];
+        let mut price_w = [0.0_f64; 4];
+        for p in 0..n {
+            let open = self.society[p].trade_openness;
+            let e = &self.econ[p];
+            let needs = self.needs_this_year[p];
+            let supply = [
+                e.output[Sector::Food.index()],
+                e.output[Sector::FossilFuel.index()] + e.output[Sector::CleanEnergy.index()],
+                e.output[Sector::Materials.index()],
+                e.output[Sector::Goods.index()],
+            ];
+            let prices = [
+                e.price[Sector::Food.index()],
+                e.price[Sector::FossilFuel.index()].min(e.price[Sector::CleanEnergy.index()]),
+                e.price[Sector::Materials.index()],
+                e.price[Sector::Goods.index()],
+            ];
+            for k in 0..4 {
+                exportable[p][k] = (supply[k] - needs[k]).max(0.0) * open;
+                want[p][k] = (needs[k] - supply[k]).max(0.0) * open;
+                world_price[k] += prices[k] * supply[k];
+                price_w[k] += supply[k];
+            }
+        }
+        for k in 0..4 {
+            world_price[k] = if price_w[k] > 0.0 { world_price[k] / price_w[k] } else { 1.0 };
+        }
+
+        // Quantity matching per category, then per-polity value balancing.
+        let mut imports = vec![[0.0_f64; 4]; n];
+        let mut exports = vec![[0.0_f64; 4]; n];
+        for k in 0..4 {
+            let s: f64 = (0..n).map(|p| exportable[p][k]).sum();
+            let w: f64 = (0..n).map(|p| want[p][k]).sum();
+            let shipped = s.min(w);
+            if shipped <= 0.0 {
+                continue;
+            }
+            for p in 0..n {
+                exports[p][k] = exportable[p][k] / s * shipped;
+                imports[p][k] = want[p][k] / w * shipped * (1.0 - TRADE_FRICTION);
+            }
+        }
+        // Balanced exchange: a polity's import value cannot exceed its export
+        // value (it pays in kind). Scale imports down where needed.
+        for p in 0..n {
+            let export_value: f64 = (0..4).map(|k| exports[p][k] * world_price[k]).sum();
+            let import_value: f64 = (0..4).map(|k| imports[p][k] * world_price[k]).sum();
+            if import_value > export_value && import_value > 0.0 {
+                let scale = export_value / import_value;
+                for k in 0..4 {
+                    imports[p][k] *= scale;
+                }
+            }
+        }
+
+        // Apply the physical flows to each polity's available outputs.
+        for p in 0..n {
+            let e = &mut self.econ[p];
+            e.output[Sector::Food.index()] =
+                (e.output[Sector::Food.index()] - exports[p][0] + imports[p][0]).max(0.0);
+            // Energy: exports drawn pro-rata from fossil & clean; imports land
+            // in a separate ledger so the emergent clean-share stays honest.
+            let f = e.output[Sector::FossilFuel.index()];
+            let c = e.output[Sector::CleanEnergy.index()];
+            let tot = (f + c).max(1e-9);
+            e.output[Sector::FossilFuel.index()] = (f - exports[p][1] * f / tot).max(0.0);
+            e.output[Sector::CleanEnergy.index()] = (c - exports[p][1] * c / tot).max(0.0);
+            self.energy_imports[p] = imports[p][1];
+            e.output[Sector::Materials.index()] =
+                (e.output[Sector::Materials.index()] - exports[p][2] + imports[p][2]).max(0.0);
+            e.output[Sector::Goods.index()] =
+                (e.output[Sector::Goods.index()] - exports[p][3] + imports[p][3]).max(0.0);
+        }
+    }
+
+    /// Pandemic arrival: travels the trade network — the yearly probability
+    /// scales with how connected the world is (mean trade openness, and only
+    /// with more than one polity to connect). While active, the endemic
+    /// disease hazard is multiplied. Measured, drawn on the shared stream.
+    fn update_pandemic(&mut self, members: &[Vec<usize>]) {
+        if self.pandemic_years_left > 0 {
+            self.pandemic_years_left -= 1;
+        }
+        if self.econ.len() < 2 {
+            return;
+        }
+        let inhabited = members.iter().filter(|m| !m.is_empty()).count();
+        if inhabited < 2 {
+            return;
+        }
+        let mean_open: f64 = self.society.iter().map(|s| s.trade_openness).sum::<f64>()
+            / self.society.len() as f64;
+        if self.rng.f64() < PANDEMIC_RATE * mean_open {
+            self.pandemic_years_left = PANDEMIC_YEARS;
+            self.pandemics_total += 1;
+        }
+    }
+
+    /// **War**: for each pair of adjacent polities, conflict risk rises with
+    /// the would-be aggressor's measured deprivation (scarcity grievance,
+    /// Homer-Dixon) and falls with the pair's trade interdependence (the
+    /// capitalist peace, Gartzke 2007). A war year kills working-age people on
+    /// both sides and destroys capital. Nothing is scripted: a fed, trading
+    /// world simply never rolls a war.
+    fn conflict(&mut self, members: &[Vec<usize>]) {
+        let pairs = self.adjacency.clone();
+        for (a, b) in pairs {
+            if members[a].is_empty() || members[b].is_empty() {
+                continue;
+            }
+            let deprived_share = |mem: &[usize], people: &People| {
+                mem.iter().filter(|&&i| people.deprivation[i] > 0.5).count() as f64
+                    / mem.len() as f64
+            };
+            let grievance = deprived_share(&members[a], &self.people)
+                .max(deprived_share(&members[b], &self.people));
+            let interdependence =
+                self.society[a].trade_openness.min(self.society[b].trade_openness);
+            let p_war = CONFLICT_BASE * grievance * (1.0 - interdependence);
+            if p_war <= 0.0 || self.rng.f64() >= p_war {
+                continue;
+            }
+            self.wars_total += 1;
+            for &side in &[a, b] {
+                for s in Sector::ALL {
+                    self.econ[side].capital[s.index()] *= 1.0 - WAR_DESTRUCTION;
+                }
+                self.econ[side].treasury *= 1.0 - WAR_DESTRUCTION;
+                for &i in &members[side] {
+                    if !self.people.alive[i] || !(15..70).contains(&self.people.age[i]) {
+                        continue;
+                    }
+                    if self.rng.f64() < WAR_MORTALITY {
+                        self.people.alive[i] = false;
+                        self.death_age_sum += self.people.age[i] as f64;
+                        self.death_count += 1;
+                        self.war_deaths_total += 1;
+                    } else {
+                        // Survivors are disrupted (fields burned, stores lost).
+                        self.people.deprivation[i] =
+                            (self.people.deprivation[i] + 0.3).min(3.0);
+                    }
+                }
+            }
+        }
+    }
+
     /// Mortality and fertility for the whole population (uses the RNG stream).
     fn vital_events(&mut self, members: &[Vec<usize>]) {
-        // Deaths.
+        // Deaths: biology + the endemic disease load of settlement density,
+        // worsened by malnutrition, tempered by knowledge (hygiene/medicine —
+        // McKeown 1976), and multiplied during a pandemic.
+        let density: Vec<f64> = (0..members.len())
+            .map(|p| {
+                let cells = self.polity_cells[p].len().max(1);
+                members[p].len() as f64 / cells as f64
+            })
+            .collect();
+        let pandemic = self.pandemic_years_left > 0;
         for i in 0..self.people.len() {
             if !self.people.alive[i] {
                 continue;
             }
             self.people.age[i] += 1;
             let t = self.planet.temp[self.people.cell[i]];
-            let h = self.people.mortality_hazard(i, t);
+            let mut h = self.people.mortality_hazard(i, t);
+            let p = self.people.polity[i] as usize;
+            if p < density.len() {
+                h += disease_hazard(
+                    density[p],
+                    self.people.deprivation[i],
+                    self.people.skill[i],
+                    pandemic,
+                );
+            }
+            let h = h.clamp(0.0, 1.0);
             if self.rng.f64() < h {
                 self.people.alive[i] = false;
                 self.death_age_sum += self.people.age[i] as f64;
                 self.death_count += 1;
+                if self.people.age[i] < 5 {
+                    self.child_deaths_total += 1;
+                }
             }
         }
 
@@ -780,11 +1063,12 @@ impl World {
                 if !self.people.alive[i] || !self.people.is_fertile(i) {
                     continue;
                 }
+                self.fertile_years_total += 1.0;
                 let provision = self.people.wellbeing[i].clamp(0.0, 1.0);
                 let caution = 1.0 - 0.5 * self.people.risk_aversion[i];
                 let opportunity =
                     1.0 + FERTILITY_OPPORTUNITY_COST * (self.people.skill[i] - 1.0).max(0.0);
-                let rate = MAX_BIRTH_RATE * provision * caution / opportunity;
+                let rate = self.cfg.birth_ceiling * provision * caution / opportunity;
                 if self.rng.f64() < rate {
                     self.spawn_child(i);
                 }
@@ -811,6 +1095,7 @@ impl World {
         // Children inherit a fraction of parental human capital, and the
         // parent link that routes their needs to the family budget.
         let skill = (0.5 + 0.5 * self.people.skill[parent]).max(0.5);
+        self.births_total += 1;
         self.people.push(cell, polity, endow, skill, psyche, 0, parent);
     }
 
@@ -1036,6 +1321,23 @@ impl World {
     }
 }
 
+/// Endemic **disease hazard**: crowd diseases scale with settlement density
+/// (saturating — McNeill 1976), are worsened by malnutrition (deprivation) and
+/// tempered by knowledge (hygiene, medicine — McKeown 1976); a pandemic year
+/// multiplies the load. A pure response function: directions mechanistic,
+/// magnitudes in the assumptions registry.
+pub fn disease_hazard(density: f64, deprivation: f64, skill: f64, pandemic: bool) -> f64 {
+    let crowding = density / (density + DISEASE_DENSITY_HALF);
+    let nutrition = 1.0 + deprivation.min(2.0);
+    let knowledge = 1.0 + 0.5 * (skill - 1.0).max(0.0);
+    let base = DISEASE_BASE * crowding * nutrition / knowledge;
+    if pandemic {
+        base * PANDEMIC_SEVERITY
+    } else {
+        base
+    }
+}
+
 fn ratio(supply: f64, demand: f64) -> f64 {
     if demand <= 1e-9 {
         1.0
@@ -1100,40 +1402,44 @@ mod tests {
         assert_eq!(ma.wealth_gini.to_bits(), mb.wealth_gini.to_bits());
     }
 
-    /// A carbon price shifts the *emergent* energy mix toward clean and lowers
-    /// CO₂ and warming — same planet and seed, only the policy differs.
+    /// A carbon price (and nothing else — pairing it with research would also
+    /// make *fossil* extraction more productive, a genuine Jevons rebound this
+    /// test once tripped over) shifts the emergent energy mix toward clean and
+    /// lowers CO₂, on the same planets, averaged over a seed ensemble.
     #[test]
     fn a_carbon_price_decarbonises_and_cools() {
-        let cfg = small_cfg();
-        let dirty = {
-            let mut w = World::new(&cfg);
-            for _ in 0..150 {
-                w.step();
-            }
-            w.measure()
-        };
-        let priced = {
+        let run = |carbon: f64, seed: u64| {
+            let mut cfg = small_cfg();
+            cfg.seed = seed;
+            // Plentiful fossil, so the unpriced arm is never *forced* clean by
+            // depletion within the horizon (an emergent confound this test
+            // once tripped over: scarcity pricing did the policy's job).
+            cfg.fossil_endowment = 300.0;
             let mut s = SocietyParams::default();
-            s.carbon_price = 5.0;
-            s.research_share = 0.2;
-            let sc = Scenario::new("priced", cfg.clone()).with_uniform_society(s);
+            s.carbon_price = carbon;
+            let sc = Scenario::new("x", cfg).with_uniform_society(s);
             let mut w = World::from_scenario(&sc);
             for _ in 0..150 {
                 w.step();
             }
             w.measure()
         };
+        let seeds = [1u64, 2, 3];
+        let mean = |carbon: f64, f: fn(&crate::measure::Measurements) -> f64| {
+            seeds.iter().map(|&s| f(&run(carbon, s))).sum::<f64>() / seeds.len() as f64
+        };
+        let _ = &run; // (closure reused below)
+        let dirty_co2 = mean(0.0, |m| m.co2);
+        let priced_co2 = mean(8.0, |m| m.co2);
+        let dirty_clean = mean(0.0, |m| m.clean_share);
+        let priced_clean = mean(8.0, |m| m.clean_share);
         assert!(
-            priced.clean_share > dirty.clean_share,
-            "a carbon price should raise the clean-energy share: {} vs {}",
-            priced.clean_share,
-            dirty.clean_share
+            priced_clean > dirty_clean,
+            "a carbon price should raise the clean-energy share: {priced_clean} vs {dirty_clean}"
         );
         assert!(
-            priced.co2 < dirty.co2,
-            "a carbon price should lower emergent CO2: {} vs {}",
-            priced.co2,
-            dirty.co2
+            priced_co2 < dirty_co2,
+            "a carbon price should lower emergent CO2: {priced_co2} vs {dirty_co2}"
         );
     }
 
@@ -1283,17 +1589,132 @@ mod tests {
             for _ in 0..200 {
                 w.step();
             }
-            (w.measure().population, w.measure().mean_skill)
+            let m = w.measure();
+            let child_mortality = if w.births_total > 0 {
+                w.child_deaths_total as f64 / w.births_total as f64
+            } else {
+                1.0
+            };
+            let fertility = if w.fertile_years_total > 0.0 {
+                w.births_total as f64 / w.fertile_years_total
+            } else {
+                0.0
+            };
+            (m.population, m.mean_skill, child_mortality, fertility)
         };
-        let (pop_schooled, skill_schooled) = pop_after(0.7, 0.25);
-        let (pop_unschooled, skill_unschooled) = pop_after(0.0, 0.25);
+        let (schooled, unschooled) = (pop_after(0.7, 0.25), pop_after(0.0, 0.25));
         assert!(
-            skill_schooled > skill_unschooled,
-            "schooling should raise skill: {skill_schooled} vs {skill_unschooled}"
+            schooled.1 > unschooled.1,
+            "schooling should raise skill: {} vs {}",
+            schooled.1,
+            unschooled.1
         );
+        assert!(schooled.0 > 0, "the schooled society must survive its transition");
+        // Mortality side (McKeown): the schooled society loses a smaller share
+        // of its children. (Mean-age-at-death is a misleading instrument in a
+        // growing population — a baby boom drags it down at identical rates —
+        // so the assertions are on RATES.)
         assert!(
-            pop_schooled < pop_unschooled,
-            "higher human capital should lower fertility (Becker): pop {pop_schooled} vs {pop_unschooled}"
+            schooled.2 < unschooled.2,
+            "schooling should cut child mortality: {} vs {}",
+            schooled.2,
+            unschooled.2
         );
+        // Fertility side (Becker): realised births per fertile person-year
+        // fall as human capital rises.
+        assert!(
+            schooled.3 < unschooled.3,
+            "schooling should lower realised fertility: {} vs {}",
+            schooled.3,
+            unschooled.3
+        );
+    }
+
+    /// **Trade is gains from comparative advantage, emergent.** Two polities on
+    /// the same planet, identical but for borders: with trade open, the deprived
+    /// fraction is no higher — and typically lower — than under autarky, because
+    /// surplus regions feed deficit regions. We assert open trade does not make
+    /// the world hungrier (it lets specialised regions exchange), at equal seed.
+    #[test]
+    fn open_trade_does_not_worsen_deprivation() {
+        let depriv = |openness: f64| {
+            let mut cfg = small_cfg();
+            cfg.n_polities = 6;
+            let mut s = SocietyParams::default();
+            s.trade_openness = openness;
+            let sc = Scenario::new("t", cfg).with_uniform_society(s);
+            let mut w = World::from_scenario(&sc);
+            let mut acc = 0.0;
+            for _ in 0..120 {
+                w.step();
+                acc += w.measure().deprivation_rate;
+            }
+            acc / 120.0
+        };
+        let open = depriv(1.0);
+        let autarky = depriv(0.0);
+        assert!(
+            open <= autarky + 0.02,
+            "open trade should not worsen deprivation vs autarky: {open} vs {autarky}"
+        );
+    }
+
+    /// **Disease is density-driven and knowledge-tempered (McNeill/McKeown).**
+    /// The pure hazard rises with settlement density, worsens with malnutrition,
+    /// falls with human capital, and spikes in a pandemic — all directionally,
+    /// none of it scripted onto an outcome.
+    #[test]
+    fn disease_hazard_responds_to_density_nutrition_and_knowledge() {
+        let sparse = disease_hazard(0.5, 0.0, 1.0, false);
+        let dense = disease_hazard(20.0, 0.0, 1.0, false);
+        assert!(dense > sparse, "crowd disease rises with density: {dense} vs {sparse}");
+        let hungry = disease_hazard(20.0, 1.5, 1.0, false);
+        assert!(hungry > dense, "malnutrition worsens disease");
+        let learned = disease_hazard(20.0, 0.0, 3.0, false);
+        assert!(learned < dense, "knowledge (hygiene/medicine) tempers disease");
+        let plague = disease_hazard(20.0, 0.0, 1.0, true);
+        assert!(plague > dense * 3.0, "a pandemic multiplies the hazard");
+    }
+
+    /// **War is scarcity-driven and trade-tempered, and emergent.** A
+    /// well-fed, freely-trading world rolls no wars over a long run (grievance
+    /// ≈ 0, interdependence ≈ 1 ⇒ probability 0); the conflict machinery only
+    /// engages when the measured preconditions appear.
+    #[test]
+    fn a_fed_trading_world_has_no_wars() {
+        let mut cfg = small_cfg();
+        cfg.n_polities = 6;
+        let mut s = SocietyParams::default();
+        s.trade_openness = 1.0;
+        // A floor keeps deprivation low (fed world).
+        s.tax_rate = 0.15;
+        s.transfer = TransferRegime::Floor;
+        let sc = Scenario::new("peace", cfg).with_uniform_society(s);
+        let mut w = World::from_scenario(&sc);
+        for _ in 0..150 {
+            w.step();
+        }
+        assert_eq!(w.wars_total, 0, "a fed, trading world should see no war");
+    }
+
+    /// Determinism holds with trade, disease and war all active: same config +
+    /// seed ⇒ identical population, CO₂, Gini and event ledgers.
+    #[test]
+    fn full_world_is_deterministic() {
+        let mut cfg = small_cfg();
+        cfg.n_polities = 5;
+        let run = || {
+            let mut w = World::new(&cfg);
+            for _ in 0..120 {
+                w.step();
+            }
+            (w.measure(), w.pandemics_total, w.wars_total, w.war_deaths_total)
+        };
+        let (ma, pa, wa, da) = run();
+        let (mb, pb, wb, db) = run();
+        assert_eq!(ma.population, mb.population);
+        assert_eq!(ma.co2.to_bits(), mb.co2.to_bits());
+        assert_eq!(ma.wealth_gini.to_bits(), mb.wealth_gini.to_bits());
+        assert_eq!((pa, wa, da), (pb, wb, db));
     }
 }

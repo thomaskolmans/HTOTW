@@ -46,6 +46,7 @@
 //! assert!(m.population > 0);
 //! ```
 
+pub mod calibrate;
 pub mod config;
 pub mod constants;
 pub mod economy;

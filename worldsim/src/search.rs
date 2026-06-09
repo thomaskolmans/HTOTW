@@ -128,6 +128,7 @@ fn random_params(rng: &mut Rng) -> SocietyParams {
         enforcement_share: rng.range(0.0, 0.3),
         carbon_price: rng.range(0.0, 8.0),
         migration_openness: rng.range(0.0, 1.0),
+        trade_openness: rng.range(0.0, 1.0),
         governance,
         vote_period: 10 + rng.below(20) as u32,
     }
@@ -148,6 +149,7 @@ fn mutate(base: &SocietyParams, rng: &mut Rng) -> SocietyParams {
     p.enforcement_share = clamp01(jitter(p.enforcement_share, 0.1, rng));
     p.carbon_price = jitter(p.carbon_price, 2.0, rng).clamp(0.0, 15.0);
     p.migration_openness = clamp01(jitter(p.migration_openness, 0.2, rng));
+    p.trade_openness = clamp01(jitter(p.trade_openness, 0.2, rng));
     // Categorical flips at a low rate.
     if rng.f64() < 0.2 {
         p.property = random_params(rng).property;

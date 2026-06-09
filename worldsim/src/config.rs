@@ -66,6 +66,10 @@ pub struct SocietyParams {
     pub carbon_price: f64,
     /// 0 = closed borders (no in-migration), 1 = fully open.
     pub migration_openness: f64,
+    /// 0 = autarky (no foreign exchange), 1 = free trade. Scales this polity's
+    /// participation in the world goods market — a real policy lever
+    /// (tariffs/embargo as a single dial).
+    pub trade_openness: f64,
     pub governance: GovernanceRegime,
     /// Years between referenda when governance is not `Fixed`.
     pub vote_period: u32,
@@ -88,6 +92,8 @@ impl Default for SocietyParams {
             enforcement_share: 0.0,
             carbon_price: 0.0,
             migration_openness: 1.0,
+            // Free exchange is the null (no institution restricts it).
+            trade_openness: 1.0,
             governance: GovernanceRegime::Fixed,
             vote_period: 20,
         }
@@ -125,6 +131,15 @@ pub struct WorldConfig {
     /// per capita of the initial population (the endowment scale).
     pub fossil_endowment: f64,
     pub mineral_endowment: f64,
+    /// Labour productivity scale: numéraire units one effective worker-year
+    /// yields at unit capital/access (pre-modern agriculture fed 3–5 per
+    /// worker; Allen 2000). A *calibratable primitive* — `worldsim calibrate`
+    /// tunes it until measured moments match documented reality.
+    pub base_yield: f64,
+    /// Physiological birth-rate ceiling per fertile person-year (Bongaarts
+    /// 1978 proximate determinants; ~total fertility 8 at the maximum). Also a
+    /// calibratable primitive; the realised rate stays an agent decision.
+    pub birth_ceiling: f64,
     /// Heritable psychology ranges (Phase-9 traits, now core).
     pub patience: Range,
     pub risk_aversion: Range,
@@ -143,6 +158,8 @@ impl Default for WorldConfig {
             n_polities: 6,
             fossil_endowment: 60.0,
             mineral_endowment: 60.0,
+            base_yield: 5.0,
+            birth_ceiling: 0.35,
             patience: Range(0.2, 0.8),
             risk_aversion: Range(0.2, 0.8),
             fairness: Range(0.2, 0.8),
@@ -290,6 +307,8 @@ fn set_world_key(w: &mut WorldConfig, key: &str, value: &str) -> Result<(), Stri
         "polities" => w.n_polities = num(key, value)?,
         "fossil-endowment" => w.fossil_endowment = num(key, value)?,
         "mineral-endowment" => w.mineral_endowment = num(key, value)?,
+        "base-yield" => w.base_yield = num(key, value)?,
+        "birth-ceiling" => w.birth_ceiling = num(key, value)?,
         "patience" => w.patience = range(key, value)?,
         "risk-aversion" => w.risk_aversion = range(key, value)?,
         "fairness" => w.fairness = range(key, value)?,
@@ -341,6 +360,7 @@ fn set_society_key(s: &mut SocietyParams, key: &str, value: &str) -> Result<(), 
         "enforcement-share" => s.enforcement_share = frac(key, value)?,
         "carbon-price" => s.carbon_price = num::<f64>(key, value)?.max(0.0),
         "migration-openness" => s.migration_openness = frac(key, value)?,
+        "trade-openness" => s.trade_openness = frac(key, value)?,
         "governance" => {
             s.governance = match value {
                 "fixed" => GovernanceRegime::Fixed,

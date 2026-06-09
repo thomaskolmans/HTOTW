@@ -23,6 +23,7 @@ fn dispatch(args: &[String]) -> i32 {
         Some("run") => cmd_run(&args[1..]),
         Some("compare") => cmd_compare(&args[1..]),
         Some("search") => cmd_search(&args[1..]),
+        Some("calibrate") => cmd_calibrate(&args[1..]),
         Some("list") => cmd_list(),
         Some("help") | Some("--help") | Some("-h") | None => {
             print_help();
@@ -48,7 +49,9 @@ fn print_help() {
          USAGE:\n\
          \x20 worldsim run     [--archetype NAME | --file PATH] [--years N] [--seed S] [--agents N]\n\
          \x20 worldsim compare  --archetype A --archetype B [--years N] [--seeds 1,2,3]\n\
-         \x20 worldsim search  [--years N] [--seeds 1,2,3] [--generations G] [--agents N]\n\
+         \x20 worldsim search  [--years N] [--seeds 1,2,3] [--generations G] [--agents N] [--objective NAME]\n\
+         \x20 worldsim calibrate [--samples N] [--refine N] [--years N] [--seeds 1,2,3]\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 # fit the PRIMITIVES so measured moments match documented reality (MSM)\n\
          \x20 worldsim list\n\
          \x20 worldsim help\n\
          \n\
@@ -241,6 +244,10 @@ fn cmd_run(args: &[String]) -> i32 {
     }
     println!();
     summarize(&init, &w.measure(), w.welfare());
+    println!(
+        "  events:      {} pandemics, {} wars ({} war deaths) over {} years",
+        w.pandemics_total, w.wars_total, w.war_deaths_total, years
+    );
     0
 }
 
@@ -448,6 +455,81 @@ fn cmd_search(args: &[String]) -> i32 {
             c.params.property, c.params.transfer
         );
     }
+    0
+}
+
+/// `worldsim calibrate` — Method of Simulated Moments: tune the scale-model
+/// PRIMITIVES (labour yield, birth ceiling, fossil endowment) until the
+/// world's MEASURED moments (life expectancy, wealth Gini, population
+/// stationarity, deprivation) land on documented pre-industrial reality. The
+/// targets live only inside the loss — never written into the world.
+fn cmd_calibrate(args: &[String]) -> i32 {
+    use worldsim::calibrate as cal;
+    let mut samples = 16usize;
+    let mut refine = 8usize;
+    let mut years = 80usize;
+    let mut seeds = vec![1u64, 2];
+    let mut agents = 1000usize;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--samples" => {
+                let Some(v) = args.get(i + 1) else { return ae("--samples needs a value"); };
+                let Ok(n) = v.parse() else { return ae("invalid --samples"); };
+                samples = n;
+                i += 2;
+            }
+            "--refine" => {
+                let Some(v) = args.get(i + 1) else { return ae("--refine needs a value"); };
+                let Ok(n) = v.parse() else { return ae("invalid --refine"); };
+                refine = n;
+                i += 2;
+            }
+            "--years" | "-y" => {
+                let Some(v) = args.get(i + 1) else { return ae("--years needs a value"); };
+                let Ok(n) = v.parse() else { return ae("invalid --years"); };
+                years = n;
+                i += 2;
+            }
+            "--seeds" => {
+                let Some(v) = args.get(i + 1) else { return ae("--seeds needs a value"); };
+                match parse_seeds(v) { Ok(s) => seeds = s, Err(e) => return ae(&e) }
+                i += 2;
+            }
+            "--agents" => {
+                let Some(v) = args.get(i + 1) else { return ae("--agents needs a value"); };
+                let Ok(n) = v.parse() else { return ae("invalid --agents"); };
+                agents = n;
+                i += 2;
+            }
+            other => return ae(&format!("unknown argument: {other}")),
+        }
+    }
+    let mut base = WorldConfig::default();
+    base.nlon = 36;
+    base.nlat = 18;
+    base.n_agents = agents;
+    let targets = cal::preindustrial_targets();
+    println!("calibrating PRIMITIVES to documented pre-industrial moments (MSM)");
+    println!("  targets (right-hand side of the loss ONLY):");
+    for t in &targets {
+        println!("    {:<18} = {:>7.2}  (weight {})", t.name, t.value, t.weight);
+    }
+    println!(
+        "  searching {} knobs: {} LHS samples + {} refinement passes, {} seeds x {} years\n",
+        cal::KNOBS.len(), samples, refine, seeds.len(), years
+    );
+    let result = cal::calibrate(&base, &targets, &seeds, years, samples, refine);
+    println!("  loss: start {:.4}  ->  fitted {:.4}", result.initial_loss, result.loss);
+    println!("  fitted primitives:");
+    for ((name, _, _), v) in cal::KNOBS.iter().zip(result.theta.iter()) {
+        println!("    {name:<18} = {v:.3}");
+    }
+    println!("\n  EMERGENT moments at the fitted primitives (measured, never set):");
+    println!("    life expectancy   = {:.1}", result.moments.life_expectancy);
+    println!("    wealth gini       = {:.3}", result.moments.wealth_gini);
+    println!("    population ratio  = {:.2}", result.moments.pop_ratio);
+    println!("    deprivation rate  = {:.3}", result.moments.deprivation);
     0
 }
 

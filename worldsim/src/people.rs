@@ -139,9 +139,16 @@ impl People {
     /// biological response; the realised death is drawn against it.
     pub fn mortality_hazard(&self, i: usize, local_temp: f64) -> f64 {
         let a = self.age[i] as f64;
-        let mut h = MAKEHAM + GOMPERTZ_A * (GOMPERTZ_B * a).exp();
+        // Knowledge (human capital) cuts the *environmental* mortality terms —
+        // the background (Makeham) hazard and the infant penalty — via hygiene,
+        // clean water handling, and care. This is the McKeown (1976) mechanism
+        // behind the historical mortality decline: senescence (the Gompertz
+        // term) stays biological and untouched. The demographic transition can
+        // therefore EMERGE: education lowers mortality first, then fertility.
+        let knowledge = 1.0 + 0.5 * (self.skill[i] - 1.0).max(0.0);
+        let mut h = MAKEHAM / knowledge + GOMPERTZ_A * (GOMPERTZ_B * a).exp();
         if self.age[i] < 5 {
-            h += INFANT_HAZARD;
+            h += INFANT_HAZARD / knowledge;
         }
         // Nonlinear in severity: mild chronic shortfall stunts rather than
         // kills; mortality climbs steeply only as deprivation deepens (famine

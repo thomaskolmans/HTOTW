@@ -71,10 +71,35 @@ Everything is **dependency-free** and **bit-deterministic** (same config + seed
 ```sh
 cargo run --release -p worldsim -- run --archetype social-democracy --years 250
 cargo run --release -p worldsim -- compare --archetype laissez-faire \
-    --archetype social-democracy --archetype degrowth-commons --years 250
-cargo run --release -p worldsim -- search --years 150 --generations 8
+    --archetype degrowth-commons --objective green --years 250
+cargo run --release -p worldsim -- search --objective balanced --years 150
+cargo run --release -p worldsim -- calibrate          # fit primitives to documented reality
 cargo run --release -p worldsim -- list
 ```
+
+### Calibration — simulate *to* reality
+
+`worldsim calibrate` is the deepest answer to "make no assumptions": rather than
+trusting the scale-model primitives (labour yield, the fertility ceiling, the
+fossil endowment), it **fits them by the Method of Simulated Moments** so the
+world's *measured, emergent* moments — life expectancy, the wealth Gini,
+population stationarity, deprivation — land on documented pre-industrial values
+(Riley 2005; Scheidel 2017; McEvedy & Jones 1978). The targets live only inside
+a loss function; the fitted output is a *primitive* vector. A typical run drops
+the loss ~60× and reproduces a ~30-year life expectancy, a ~0.7 wealth Gini and
+a near-stationary population — none of it ever set. Calibrate first, then trust
+the counterfactuals.
+
+### Trade, disease and war
+
+Polities now **trade** (value-balanced multilateral exchange with iceberg
+transport costs — comparative advantage emerges, and a `trade-openness` dial is
+a real policy lever); **disease** is endemic and density-driven (McNeill),
+worsened by malnutrition and tempered by knowledge (McKeown), with **pandemics**
+that travel the trade network; and **war** is scarcity-driven (Homer-Dixon) and
+trade-tempered (the capitalist peace, Gartzke) between neighbouring polities. A
+fed, freely-trading world rolls no wars; a fragmented, scarce, autarkic one
+descends into recurring conflict — all emergent, none scripted.
 
 `run --file PATH` loads a `.world` scenario:
 

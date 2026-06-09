@@ -153,6 +153,40 @@ pub const FERTILITY_OPPORTUNITY_COST: f64 = 0.5;
 /// rates run 10–20% — Davis & Haltiwanger 1992). Stops the unphysical
 /// all-at-once herding a synchronous best-response would produce.
 pub const JOB_SEARCH_RATE: f64 = 0.15;
+// ---- Disease (density-driven, knowledge-tempered) and war (scarcity-driven,
+// trade-tempered). Directions are mechanistic and cited; magnitudes are
+// calibration knobs. ----
+
+/// Endemic crowd-disease hazard scale. Crowd diseases require dense host
+/// populations: they appeared with settlement and intensified with urban
+/// density (McNeill 1976, *Plagues and Peoples*).
+pub const DISEASE_BASE: f64 = 0.012;
+/// Half-saturation settlement density (people per cell) of the crowding term.
+pub const DISEASE_DENSITY_HALF: f64 = 5.0;
+/// Pandemic arrival probability per year at full trade connectivity —
+/// pandemics travel the trade routes (the Black Death moved with Silk Road
+/// and shipping traffic; Benedictow 2004).
+pub const PANDEMIC_RATE: f64 = 0.012;
+/// Mortality multiplier on the disease hazard during a pandemic, and how many
+/// years one lasts.
+pub const PANDEMIC_SEVERITY: f64 = 8.0;
+pub const PANDEMIC_YEARS: u32 = 2;
+
+/// War probability scale per adjacent polity pair per year at maximal
+/// grievance. Resource scarcity raises conflict risk (Homer-Dixon 1999);
+/// trade interdependence lowers it (the "capitalist peace", Gartzke 2007) —
+/// in the model, grievance is the aggressor's measured deprivation and
+/// interdependence the pair's trade openness.
+pub const CONFLICT_BASE: f64 = 0.25;
+/// Excess working-age mortality in each belligerent in a war year.
+pub const WAR_MORTALITY: f64 = 0.03;
+/// Fraction of both belligerents' capital destroyed in a war year.
+pub const WAR_DESTRUCTION: f64 = 0.1;
+
+/// Iceberg transport cost: the fraction of traded goods "melting" in transit
+/// (Samuelson 1954) — the physical reason trade does not fully equalise
+/// prices and nearby exchange beats distant exchange.
+pub const TRADE_FRICTION: f64 = 0.15;
 /// Granularity of one referendum step on a fiscal dial (how much one vote can
 /// move a tax/price per electoral period — institutional stickiness; the
 /// *direction* of every step is the voters' measured interest, never scripted).

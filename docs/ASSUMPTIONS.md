@@ -39,6 +39,30 @@ Earth-like land fraction, a ~288 K mean, a pre-modern life-expectancy regime).
 They are **scale-model** units, not predictions; the realised macro quantities
 emerge and are measured.
 
+### Calibration closes the loop
+
+The scale-model knobs (labour yield, the fertility ceiling, the fossil
+endowment) are not left to taste: `worldsim calibrate` **fits them by the
+Method of Simulated Moments** (McFadden 1989; Grazzini & Richiardi 2015) so the
+*measured* emergent moments match documented reality — pre-industrial life
+expectancy ~30 (Riley 2005), a wealth Gini ~0.7 (Scheidel 2017), a
+near-stationary population (McEvedy & Jones 1978), modest deprivation (Ó Gráda
+2009). The targets appear **only inside the loss**; the fitted output is a
+primitive vector. This is what "simulate *to* the numbers" means in practice —
+make the world reproduce history before trusting its counterfactuals.
+
+### Trade, disease and war (added subsystems)
+
+| Mechanism | Direction (mechanistic, cited) | Magnitude |
+|---|---|---|
+| Inter-polity trade | value-balanced exchange, iceberg transport cost (Samuelson 1954) | `TRADE_FRICTION` |
+| Endemic disease | rises with settlement density (McNeill 1976), worse with malnutrition, tempered by knowledge (McKeown 1976) | `DISEASE_*` |
+| Pandemics | arrive along the trade network (Benedictow 2004) | `PANDEMIC_*` |
+| War | scarcity grievance (Homer-Dixon 1999) × low trade interdependence (Gartzke 2007) | `CONFLICT_BASE`, `WAR_*` |
+
+As with every behavioural constant, the *directions* are mechanistic and the
+*magnitudes* are calibration knobs, not targets.
+
 ## Rule 3 — social structure emerges or is configured; it is never hard-coded
 
 Mechanisms that earlier hid as fixed rules are now either **emergent from

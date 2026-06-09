@@ -79,34 +79,43 @@ pub struct Economy {
     pub last_wage: [f64; Sector::N],
     /// Effective labour employed in each sector this year (measured).
     pub labour: [f64; Sector::N],
+    /// Labour-productivity scale (from `WorldConfig::base_yield` — a
+    /// calibratable primitive, not an outcome).
+    pub base_yield: f64,
     /// Treasury: collected revenue awaiting allocation (numéraire).
     pub treasury: f64,
 }
 
-/// Base labour productivity: numéraire units one effective worker-year yields
-/// at unit capital and unit resource access. The numéraire is one adult-year of
-/// food, and a pre-modern agricultural worker fed roughly 3–5 people including
-/// themselves (Allen 2000; Clark 2007, agricultural labour productivity before
-/// 1800); with capital deepening and learning the effective figure grows, as it
-/// did historically. Output is constant-returns in labour at the margin — the
-/// *diminishing* returns and the carrying-capacity ceiling come from the finite
-/// resource each sector draws on (in `World`), not from a sublinear labour
-/// exponent, which would make per-capita output vanish as a population grows.
+/// Default base labour productivity (see `WorldConfig::base_yield`, which is
+/// the calibratable primitive; this is its documented default). The numéraire
+/// is one adult-year of food, and a pre-modern agricultural worker fed roughly
+/// 3–5 people including themselves (Allen 2000; Clark 2007); with capital
+/// deepening and learning the effective figure grows, as it did historically.
 pub const BASE_YIELD: f64 = 5.0;
+
+/// Clean energy's starting productivity relative to mature sectors. Solar
+/// electricity cost fell ~three orders of magnitude from the 1950s to the
+/// 2020s purely through deployment learning (Way et al. 2022); the technology
+/// *starts* uncompetitive and must earn its way down the learning curve — the
+/// energy transition is an emergent event, not an initial condition.
+pub const CLEAN_INITIAL_PRODUCTIVITY: f64 = 0.15;
 
 impl Default for Economy {
     fn default() -> Economy {
+        let mut productivity = [1.0; Sector::N];
+        productivity[Sector::CleanEnergy.index()] = CLEAN_INITIAL_PRODUCTIVITY;
         Economy {
             // A modest initial capital and unit productivity in every sector,
-            // with clean energy starting expensive-and-immature (low cumulative
-            // experience) so its rise has to be *earned* by deployment.
+            // with clean energy starting expensive-and-immature so its rise has
+            // to be *earned* by deployment (see CLEAN_INITIAL_PRODUCTIVITY).
             capital: [1.0; Sector::N],
-            productivity: [1.0; Sector::N],
+            productivity,
             cumulative: [1.0; Sector::N],
             output: [0.0; Sector::N],
             price: [1.0; Sector::N],
             last_wage: [1.0; Sector::N],
             labour: [0.0; Sector::N],
+            base_yield: BASE_YIELD,
             treasury: 0.0,
         }
     }
@@ -124,7 +133,7 @@ impl Economy {
         let i = s.index();
         let k = self.capital[i].max(1e-9);
         let l = labour.max(0.0) * access.max(0.0);
-        self.productivity[i] * BASE_YIELD * k.powf(CAPITAL_ELASTICITY) * l
+        self.productivity[i] * self.base_yield * k.powf(CAPITAL_ELASTICITY) * l
     }
 
     /// Record realised output and bank the learning: productivity rises with
@@ -211,21 +220,24 @@ mod tests {
     fn learning_by_doing_lowers_the_cost_of_scale() {
         let mut e = Economy::default();
         let p0 = e.productivity[Sector::CleanEnergy.index()];
+        assert!(p0 < 0.5, "clean energy must START immature (the transition is earned)");
         for _ in 0..20 {
             e.record_output(Sector::CleanEnergy, 5.0);
         }
         let p1 = e.productivity[Sector::CleanEnergy.index()];
         assert!(p1 > p0 * 1.5, "deploying clean energy should make it much cheaper");
         // Clean learns faster than a conventional sector at equal cumulative
-        // growth.
+        // growth — compare growth *factors* (clean starts immature, so its
+        // absolute productivity is lower by design).
         let mut f = Economy::default();
         for _ in 0..20 {
             f.record_output(Sector::Materials, 5.0);
         }
+        let clean_growth = e.productivity[Sector::CleanEnergy.index()] / CLEAN_INITIAL_PRODUCTIVITY;
+        let mat_growth = f.productivity[Sector::Materials.index()] / 1.0;
         assert!(
-            e.productivity[Sector::CleanEnergy.index()]
-                > f.productivity[Sector::Materials.index()],
-            "clean energy should have the steeper learning curve"
+            clean_growth > mat_growth,
+            "clean energy should have the steeper learning curve: x{clean_growth:.2} vs x{mat_growth:.2}"
         );
     }
 
