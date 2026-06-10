@@ -1,76 +1,65 @@
-//! # society_sim
+//! # worldsim — a first-principles planetary simulator
 //!
-//! A system-dynamics simulator for exploring **how to best organise society**.
+//! The complete loop the project exists for:
 //!
-//! The world is modelled as five coupled domains — [`state::Human`],
-//! [`state::Economy`], [`state::Environment`], [`state::Animal`] and a set of
-//! derived [`state::Planet`] composites — that evolve one year at a time.
+//! 1. **Nature, environment, physics and human psychology drive the world.**
+//!    A spherical-grid planet with latitudinal insolation, an energy-balance
+//!    climate, a hydrological cycle, ecosystems (primary productivity, soils,
+//!    forests, fisheries, biodiversity) and finite mineral/fossil deposits
+//!    ([`planet`]); a demographically real population of individual humans with
+//!    needs, ageing, and heritable psychology ([`people`]); and a multi-sector
+//!    economy (food, water, fuel, materials, manufactured goods) with emergent
+//!    prices, capital, technological learning and an energy transition
+//!    ([`economy`]).
+//! 2. **Societies are configurable inputs.** The build-up of rules, structures,
+//!    institutions, policies and laws is a [`config::SocietyParams`] — property
+//!    regimes, taxation and transfers, public investment, conservation quotas,
+//!    carbon pricing, border openness, governance mechanisms ([`society`]).
+//!    You can describe an existing society and mass-do or undo its choices.
+//! 3. **Everything social is measured, never set** ([`measure`]). There is no
+//!    input anywhere for a GDP, a Gini, a life expectancy or a temperature
+//!    trajectory; they are read off the simulated world. This is the project's
+//!    hard rule, carried over from the original engine and enforced the same
+//!    way: instruments take `&World` and cannot mutate it.
+//! 4. **Search for the best way to operate the world** ([`search`]): a
+//!    deterministic evolutionary optimiser over the society-parameter space,
+//!    scored on a measured long-run welfare functional (well-being x equity x
+//!    sustainability x survival), across seed ensembles.
 //!
-//! On top of the raw dynamics you can stack *parameterised policies*
-//! ([`policy::Policy`]). Policies never mutate the world directly; instead they
-//! contribute to a [`effects::PolicyEffects`] accumulator (a bundle of "levers"
-//! such as carbon-pricing strength, redistribution, or conservation effort).
-//! Because every policy only *adds* to this accumulator, stacking many policies
-//! is well-defined and independent of the order in which they were declared.
+//! ## On "no assumptions"
 //!
-//! ## A minimal run
+//! Every model assumes; pretending otherwise is how assumptions hide. The
+//! discipline here is: **no social outcome is ever an input**, and every
+//! physical/biological assumption is explicit, centralised and cited in
+//! [`constants`] (and `docs/ASSUMPTIONS.md`). Calibrate primitives to match
+//! measured reality — simulate *to* the numbers, never *from* them.
+//!
+//! ## Minimal run
 //!
 //! ```
-//! use society_sim::prelude::*;
-//!
-//! // Start from a present-day baseline world.
-//! let scenario = Scenario::baseline_2025();
-//!
-//! // Stack two policies on top of each other.
-//! let mut sim = Simulation::new(scenario);
-//! sim.add_policy(Box::new(CarbonTax::new(2025, 0.6)));
-//! sim.add_policy(Box::new(UniversalBasicIncome::new(2030, 0.4)));
-//!
-//! // Advance 50 years and inspect the recorded time-series.
-//! let history = sim.run(50);
-//! assert_eq!(history.len(), 51); // initial state + 50 steps
-//! let last = history.last().unwrap();
-//! println!("Year {}: wellbeing {:.2}/10", last.year, last.society.wellbeing);
+//! use worldsim::{config::WorldConfig, world::World};
+//! let mut cfg = WorldConfig::default();
+//! cfg.nlon = 24; cfg.nlat = 12; cfg.n_agents = 300; // tiny doc-test world
+//! let mut w = World::new(&cfg);
+//! for _ in 0..20 { w.step(); }
+//! let m = w.measure();
+//! assert!(m.population > 0);
 //! ```
-//!
-//! Or hand control to a simulated government and watch it produce policy:
-//!
-//! ```
-//! use society_sim::prelude::*;
-//! let mut sim = Simulation::new(Scenario::baseline_2025());
-//! sim.set_government(Box::new(ArchetypeGovernment::technocracy()));
-//! let history = sim.run(75);
-//! println!("overall score: {:.2}", history.last().unwrap().planet.overall);
-//! ```
-//!
-//! ## Scientific honesty
-//!
-//! This is an **illustrative** model, not a forecast. The equations
-//! (documented in `docs/MODEL.md`) are deliberately simple, directionally
-//! reasonable couplings — chosen so that policy *trade-offs* become visible,
-//! not so that any single number predicts the real future. Treat outputs as
-//! "what tends to happen if these assumptions hold", never as prophecy.
 
-pub mod dynamics;
-pub mod effects;
-pub mod engine;
-pub mod governance;
-pub mod policies;
-pub mod policy;
-pub mod scenario;
-pub mod sim;
-pub mod state;
-pub mod util;
+pub mod calibrate;
+pub mod config;
+pub mod constants;
+pub mod economy;
+pub mod measure;
+pub mod people;
+pub mod planet;
+pub mod render;
+pub mod rng;
+pub mod search;
+pub mod society;
+pub mod world;
 
-/// Convenient single-import surface for typical users.
-pub mod prelude {
-    pub use crate::effects::PolicyEffects;
-    pub use crate::governance::{ArchetypeGovernment, Government};
-    pub use crate::policies::*;
-    pub use crate::policy::{Policy, PolicyStack};
-    pub use crate::scenario::Scenario;
-    pub use crate::sim::{Simulation, Snapshot};
-    pub use crate::state::{
-        Animal, Economy, Environment, Governance, Human, Ideology, Planet, Society, WorldState,
-    };
-}
+pub use config::{SocietyParams, WorldConfig};
+pub use measure::Measurements;
+pub use rng::Rng;
+pub use world::World;

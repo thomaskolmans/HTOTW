@@ -1,0 +1,193 @@
+//! The **assumptions registry**: every physical, biological and psychological
+//! constant the simulator rests on, in one place, with its source. Nothing in
+//! this file is a social outcome — that is the hard rule. If a number here is
+//! wrong, fix it *here* and recalibrate; never patch an emergent output.
+//!
+//! Units: a tick is **1 year**; temperatures are Kelvin; the economic numéraire
+//! is one **food unit** (≈ one person-year of calories), so "wealth 3.0" means
+//! three person-years of food at market value.
+
+/// Stefan–Boltzmann constant σ (W·m⁻²·K⁻⁴).
+pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
+
+/// Solar constant S₀ (W·m⁻²) — modern satellite value (Kopp & Lean 2011).
+pub const SOLAR_CONSTANT: f64 = 1361.0;
+
+/// Planetary albedo of open ocean / vegetated land / bare land / ice-snow.
+/// (Budyko 1969; standard EBM surface albedos.)
+pub const ALBEDO_OCEAN: f64 = 0.10;
+pub const ALBEDO_LAND: f64 = 0.25;
+pub const ALBEDO_ICE: f64 = 0.60;
+
+/// Effective atmospheric emissivity giving a ~288 K modern global mean in the
+/// zero-dimensional energy balance (one-layer greenhouse; Sellers 1969).
+pub const EMISSIVITY: f64 = 0.612;
+
+/// Meridional heat-transport coefficient (W·m⁻²·K⁻¹) of the diffusive
+/// energy-balance model — the value range that reproduces the observed
+/// equator-to-pole gradient (North 1975: D ≈ 0.55–0.66).
+pub const HEAT_DIFFUSION: f64 = 0.6;
+
+/// CO₂ radiative forcing: F = LAMBDA · ln(C/C₀) (Myhre et al. 1998).
+pub const FORCING_LAMBDA: f64 = 5.35;
+/// Pre-industrial CO₂ concentration C₀ (ppm) (IPCC AR6).
+pub const CO2_PREINDUSTRIAL: f64 = 280.0;
+/// Planck feedback parameter (W·m⁻²·K⁻¹): warming per unit forcing is
+/// ΔT = F / PLANCK_FEEDBACK ⇒ ≈ 3.0 K per CO₂ doubling with feedbacks
+/// (IPCC AR6 central equilibrium climate sensitivity).
+pub const PLANCK_FEEDBACK: f64 = 1.23;
+/// First-order CO₂ uptake per year toward C₀ (ocean+biosphere; the ~50-100 yr
+/// dominant airborne-fraction decay mode of the Bern carbon-cycle model).
+pub const CO2_DECAY: f64 = 0.012;
+/// Surface temperature relaxation per year toward radiative equilibrium
+/// (mixed-layer ocean thermal inertia, ~15-year e-folding).
+pub const TEMP_RELAX: f64 = 0.065;
+/// Polar amplification: high-latitude warming exceeds the tropics by roughly
+/// 2–3× (IPCC AR6 ch.4). Anomaly pattern = 1 + AMP·(sin²lat − ⟨sin²lat⟩).
+pub const POLAR_AMP: f64 = 1.6;
+
+/// Net primary productivity, **Miami model** (Lieth 1975): empirical fits of
+/// NPP (g dry matter m⁻² yr⁻¹) to temperature and precipitation:
+/// NPP_T = 3000 / (1 + e^(1.315 − 0.119·T°C)), NPP_P = 3000·(1 − e^(−0.000664·P_mm)),
+/// NPP = min(NPP_T, NPP_P).
+pub const NPP_MAX: f64 = 3000.0;
+
+/// Logistic regrowth rate of standing biomass toward its NPP-set capacity
+/// (forest/grassland recovery timescales, decades: r ≈ 0.08/yr).
+pub const BIOMASS_REGROWTH: f64 = 0.08;
+/// Fishery intrinsic growth rate (Schaefer surplus-production, r ≈ 0.3/yr).
+pub const FISH_REGROWTH: f64 = 0.3;
+/// Soil fertility loss per unit of over-intensive cultivation, and its slow
+/// natural recovery (soil formation is ~10× slower than erosion under
+/// intensive use; Montgomery 2007).
+pub const SOIL_DEGRADE: f64 = 0.02;
+pub const SOIL_RECOVER: f64 = 0.002;
+/// Biodiversity responds to habitat: it declines toward the intact-habitat
+/// fraction (species–area relation, exponent z≈0.25; MacArthur & Wilson 1967)
+/// and recovers an order of magnitude more slowly.
+pub const BIODIV_DECLINE: f64 = 0.05;
+pub const BIODIV_RECOVER: f64 = 0.005;
+
+/// Human energy need: one adult-year of food defines the numéraire (≈ 0.9 M
+/// kcal/yr; FAO). Children/elderly need less — scaled by `people::need_scale`.
+pub const FOOD_NEED: f64 = 1.0;
+/// Domestic water need relative to food in numéraire terms (drinking,
+/// cooking, hygiene — small next to agricultural water, which is inside the
+/// farming production function).
+pub const WATER_NEED: f64 = 0.2;
+/// Heating-fuel need per degree-year below the comfort temperature (K), in
+/// numéraire units — zero in the tropics, material in high latitudes.
+pub const FUEL_NEED_PER_K: f64 = 0.012;
+pub const COMFORT_TEMP: f64 = 288.0;
+/// Manufactured-goods need (clothing, shelter upkeep, tools) per adult-year.
+pub const GOODS_NEED: f64 = 0.15;
+
+/// Gompertz–Makeham mortality: hazard = MAKEHAM + GOMPERTZ_A·e^(GOMPERTZ_B·age).
+/// Fit so untreated-world life expectancy lands in the documented pre-modern
+/// 30–40 yr band with high infant mortality (Gompertz 1825; CDC life tables
+/// for the shape).
+pub const MAKEHAM: f64 = 0.006;
+pub const GOMPERTZ_A: f64 = 0.00012;
+pub const GOMPERTZ_B: f64 = 0.092;
+/// Extra infant (age 0–4) hazard in the absence of adequate nutrition/care.
+pub const INFANT_HAZARD: f64 = 0.05;
+/// Mortality hazard per unit of unmet survival need (starvation/thirst/cold).
+pub const DEPRIVATION_HAZARD: f64 = 0.55;
+/// Heat-stress mortality threshold: sustained local temperature above this
+/// adds hazard (wet-bulb survivability literature; Sherwood & Huber 2010).
+pub const HEAT_STRESS_TEMP: f64 = 303.0;
+pub const HEAT_STRESS_HAZARD: f64 = 0.04;
+
+/// Female fertile window and a physiological ceiling on births per fertile
+/// year (population-level: ~0.35 births per fertile woman-year ⇒ total
+/// fertility ~8 at the biological maximum; Bongaarts 1978 proximate
+/// determinants). The *realised* rate is an agent decision, never set.
+pub const FERTILE_AGE: (u32, u32) = (15, 45);
+pub const MAX_BIRTH_RATE: f64 = 0.35;
+
+/// Learning-by-doing: sector productivity rises with the log of cumulative
+/// output (Wright 1936; Arrow 1962). Per-doubling progress ratios of 10–25%
+/// are documented across industries; clean energy sits at the high end
+/// (Way et al. 2022).
+pub const LEARNING_RATE: f64 = 0.12;
+pub const LEARNING_RATE_CLEAN: f64 = 0.22;
+/// Capital depreciation per year (standard macro 4–6%).
+pub const DEPRECIATION: f64 = 0.05;
+/// Output elasticity of capital (Cobb–Douglas α ≈ 0.3; Solow growth
+/// accounting).
+pub const CAPITAL_ELASTICITY: f64 = 0.3;
+
+/// CO₂ emitted per numéraire unit of fossil fuel produced (scaling chosen so
+/// an industrialised run moves CO₂ by hundreds of ppm over centuries — the
+/// magnitude of the historical record).
+pub const EMISSION_FACTOR_FOSSIL: f64 = 0.04;
+/// CO₂ from converting high-biomass land to agriculture (land-use change,
+/// ~10–15% of historical emissions; IPCC).
+pub const EMISSION_FACTOR_LANDUSE: f64 = 0.01;
+
+// ---- Behavioural structure (response *forms*; the directions and strengths
+// of every realised decision come from each agent's own psychology & measured
+// situation, never from a target outcome). ----
+
+/// Job-switching threshold: a worker abandons its sector when another pays
+/// more than `1 + JOB_INERTIA + JOB_INERTIA·risk_aversion` times its own wage.
+/// Labour-market friction / switching costs are large and heterogeneous
+/// (Artuç, Chaudhuri & McLaren 2010); risk-averse workers switch later.
+pub const JOB_INERTIA: f64 = 0.2;
+/// Fraction of *surplus* income (above own survival) a person of fairness 1
+/// gives to the visibly deprived around them per year. Voluntary giving runs
+/// 1–4% of income in observed societies and tracks prosocial preference
+/// (Fehr & Schmidt 1999; List 2011); scaled by the individual fairness trait.
+pub const CHARITY_RATE: f64 = 0.1;
+/// Fraction of surplus income a person of patience 1 invests (defers) per
+/// year. Saving is the behavioural face of time preference: the patient defer
+/// more (the discounting literature's core result; Frederick et al. 2002).
+pub const INVEST_RATE: f64 = 0.15;
+/// Opportunity-cost weight in the fertility decision: childrearing time costs
+/// more for the higher-skilled (their forgone wage is larger), the
+/// quantity–quality trade-off behind the demographic transition (Becker 1960;
+/// Galor & Weil 2000). Realised fertility falls as human capital rises.
+pub const FERTILITY_OPPORTUNITY_COST: f64 = 0.5;
+/// Fraction of workers who actively search/consider a job switch in a given
+/// year (staggered adjustment, Calvo 1983; observed annual job-reallocation
+/// rates run 10–20% — Davis & Haltiwanger 1992). Stops the unphysical
+/// all-at-once herding a synchronous best-response would produce.
+pub const JOB_SEARCH_RATE: f64 = 0.15;
+// ---- Disease (density-driven, knowledge-tempered) and war (scarcity-driven,
+// trade-tempered). Directions are mechanistic and cited; magnitudes are
+// calibration knobs. ----
+
+/// Endemic crowd-disease hazard scale. Crowd diseases require dense host
+/// populations: they appeared with settlement and intensified with urban
+/// density (McNeill 1976, *Plagues and Peoples*).
+pub const DISEASE_BASE: f64 = 0.012;
+/// Half-saturation settlement density (people per cell) of the crowding term.
+pub const DISEASE_DENSITY_HALF: f64 = 5.0;
+/// Pandemic arrival probability per year at full trade connectivity —
+/// pandemics travel the trade routes (the Black Death moved with Silk Road
+/// and shipping traffic; Benedictow 2004).
+pub const PANDEMIC_RATE: f64 = 0.012;
+/// Mortality multiplier on the disease hazard during a pandemic, and how many
+/// years one lasts.
+pub const PANDEMIC_SEVERITY: f64 = 8.0;
+pub const PANDEMIC_YEARS: u32 = 2;
+
+/// War probability scale per adjacent polity pair per year at maximal
+/// grievance. Resource scarcity raises conflict risk (Homer-Dixon 1999);
+/// trade interdependence lowers it (the "capitalist peace", Gartzke 2007) —
+/// in the model, grievance is the aggressor's measured deprivation and
+/// interdependence the pair's trade openness.
+pub const CONFLICT_BASE: f64 = 0.25;
+/// Excess working-age mortality in each belligerent in a war year.
+pub const WAR_MORTALITY: f64 = 0.03;
+/// Fraction of both belligerents' capital destroyed in a war year.
+pub const WAR_DESTRUCTION: f64 = 0.1;
+
+/// Iceberg transport cost: the fraction of traded goods "melting" in transit
+/// (Samuelson 1954) — the physical reason trade does not fully equalise
+/// prices and nearby exchange beats distant exchange.
+pub const TRADE_FRICTION: f64 = 0.15;
+/// Granularity of one referendum step on a fiscal dial (how much one vote can
+/// move a tax/price per electoral period — institutional stickiness; the
+/// *direction* of every step is the voters' measured interest, never scripted).
+pub const REFERENDUM_STEP: f64 = 0.05;

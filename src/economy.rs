@@ -1,0 +1,270 @@
+//! The **economy**: a multi-sector production-and-exchange system per polity.
+//! Sectors are **food** (farming, drawing on land/soil/water/climate),
+//! **water** (provisioning), **fuel** (fossil — finite and emitting — vs.
+//! **clean** — learning-curve-driven and carbon-free), **materials** (mining
+//! finite deposits) and **manufactured goods**. Each sector has a stock of
+//! **capital** that depreciates and is rebuilt from investment, and a
+//! **productivity** that rises with cumulative output (learning-by-doing,
+//! Wright/Arrow). Output uses a Cobb–Douglas capital–labour function scaled by
+//! resource access and human capital.
+//!
+//! **Prices, GDP, the energy mix and the carbon intensity of growth are all
+//! emergent** — read off realised scarcity (need vs. supply) each year. Nothing
+//! here sets a macro outcome; the society parameters mold only mechanisms
+//! (taxes, investment shares, a carbon price, conservation quotas).
+
+use crate::constants::*;
+
+/// The sectors, in a fixed order (determinism of every tally).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sector {
+    Food,
+    Water,
+    FossilFuel,
+    CleanEnergy,
+    Materials,
+    Goods,
+}
+
+impl Sector {
+    pub const ALL: [Sector; 6] = [
+        Sector::Food,
+        Sector::Water,
+        Sector::FossilFuel,
+        Sector::CleanEnergy,
+        Sector::Materials,
+        Sector::Goods,
+    ];
+    pub const N: usize = 6;
+    pub fn index(self) -> usize {
+        self as usize
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Sector::Food => "food",
+            Sector::Water => "water",
+            Sector::FossilFuel => "fossil",
+            Sector::CleanEnergy => "clean",
+            Sector::Materials => "materials",
+            Sector::Goods => "goods",
+        }
+    }
+    /// Learning rate (clean energy learns fastest; Way et al. 2022).
+    fn learning_rate(self) -> f64 {
+        match self {
+            Sector::CleanEnergy => LEARNING_RATE_CLEAN,
+            _ => LEARNING_RATE,
+        }
+    }
+}
+
+/// One polity's productive economy.
+#[derive(Debug, Clone)]
+pub struct Economy {
+    /// Capital stock per sector.
+    pub capital: [f64; Sector::N],
+    /// Productivity (total-factor) per sector; rises via learning-by-doing.
+    pub productivity: [f64; Sector::N],
+    /// Cumulative output per sector (the learning-curve experience base).
+    pub cumulative: [f64; Sector::N],
+    /// Output produced this year per sector (a flow; measured).
+    pub output: [f64; Sector::N],
+    /// Emergent price per sector (numéraire per unit; food = 1 by definition).
+    pub price: [f64; Sector::N],
+    /// **Observed wage** per unit of effective labour in each sector last year
+    /// (the worker's payout per skill-unit). This is the *information signal*
+    /// workers reallocate on — people follow last year's wages (classic cobweb
+    /// dynamics; Ezekiel 1938; Hayek: prices/wages carry the knowledge).
+    /// Emergent: revenue ÷ labour, never set.
+    pub last_wage: [f64; Sector::N],
+    /// Effective labour employed in each sector this year (measured).
+    pub labour: [f64; Sector::N],
+    /// Labour-productivity scale (from `WorldConfig::base_yield` — a
+    /// calibratable primitive, not an outcome).
+    pub base_yield: f64,
+    /// Treasury: collected revenue awaiting allocation (numéraire).
+    pub treasury: f64,
+}
+
+/// Default base labour productivity (see `WorldConfig::base_yield`, which is
+/// the calibratable primitive; this is its documented default). The numéraire
+/// is one adult-year of food, and a pre-modern agricultural worker fed roughly
+/// 3–5 people including themselves (Allen 2000; Clark 2007); with capital
+/// deepening and learning the effective figure grows, as it did historically.
+pub const BASE_YIELD: f64 = 5.0;
+
+/// Clean energy's starting productivity relative to mature sectors. Solar
+/// electricity cost fell ~three orders of magnitude from the 1950s to the
+/// 2020s purely through deployment learning (Way et al. 2022); the technology
+/// *starts* uncompetitive and must earn its way down the learning curve — the
+/// energy transition is an emergent event, not an initial condition.
+pub const CLEAN_INITIAL_PRODUCTIVITY: f64 = 0.15;
+
+impl Default for Economy {
+    fn default() -> Economy {
+        let mut productivity = [1.0; Sector::N];
+        productivity[Sector::CleanEnergy.index()] = CLEAN_INITIAL_PRODUCTIVITY;
+        Economy {
+            // A modest initial capital and unit productivity in every sector,
+            // with clean energy starting expensive-and-immature so its rise has
+            // to be *earned* by deployment (see CLEAN_INITIAL_PRODUCTIVITY).
+            capital: [1.0; Sector::N],
+            productivity,
+            cumulative: [1.0; Sector::N],
+            output: [0.0; Sector::N],
+            price: [1.0; Sector::N],
+            last_wage: [1.0; Sector::N],
+            labour: [0.0; Sector::N],
+            base_yield: BASE_YIELD,
+            treasury: 0.0,
+        }
+    }
+}
+
+impl Economy {
+    /// The labour–capital **effort** a sector brings to bear: constant-returns
+    /// in effective labour (so a populous society can feed itself), with
+    /// capital and learned productivity as multipliers and a resource-access
+    /// factor. `effort = A · BASE_YIELD · K^α · L · access`. The realised output
+    /// is this effort passed through a saturating utilization against the
+    /// sector's finite resource ceiling (in `World`), which is where the
+    /// diminishing returns and the carrying capacity actually live.
+    pub fn potential(&self, s: Sector, labour: f64, access: f64) -> f64 {
+        let i = s.index();
+        let k = self.capital[i].max(1e-9);
+        let l = labour.max(0.0) * access.max(0.0);
+        self.productivity[i] * self.base_yield * k.powf(CAPITAL_ELASTICITY) * l
+    }
+
+    /// Record realised output and bank the learning: productivity rises with
+    /// the log of cumulative output (a progress ratio per doubling).
+    pub fn record_output(&mut self, s: Sector, produced: f64) {
+        let i = s.index();
+        self.output[i] = produced;
+        let before = self.cumulative[i];
+        self.cumulative[i] += produced.max(0.0);
+        if self.cumulative[i] > before && before > 0.0 {
+            let doublings = (self.cumulative[i] / before).log2();
+            self.productivity[i] *= (1.0 + s.learning_rate()).powf(doublings.max(0.0));
+        }
+    }
+
+    /// Depreciate capital and rebuild it from this year's sector investment.
+    pub fn invest(&mut self, s: Sector, amount: f64) {
+        let i = s.index();
+        self.capital[i] = self.capital[i] * (1.0 - DEPRECIATION) + amount.max(0.0);
+    }
+
+    /// Update the emergent price of a sector from realised scarcity: the ratio
+    /// of demand (need) to supply (output + carry-over), passed through a
+    /// bounded elasticity so a shortfall raises the price and a glut lowers it.
+    /// Food is the numéraire and stays at 1. Hayek: the price *is* the
+    /// scarcity signal, not an input.
+    pub fn update_price(&mut self, s: Sector, demand: f64, supply: f64) {
+        let i = s.index();
+        if s == Sector::Food {
+            self.price[i] = 1.0;
+            return;
+        }
+        let scarcity = (demand + 1e-6) / (supply + 1e-6);
+        // Smooth toward the scarcity ratio (clamped to a sane band).
+        let target = scarcity.clamp(0.1, 10.0);
+        self.price[i] += 0.3 * (target - self.price[i]);
+        self.price[i] = self.price[i].clamp(0.05, 20.0);
+    }
+
+    /// Total GDP this year = value of all sector output at emergent prices.
+    pub fn gdp(&self) -> f64 {
+        Sector::ALL
+            .iter()
+            .map(|&s| self.output[s.index()] * self.price[s.index()])
+            .sum()
+    }
+
+    /// Clean-energy share of total energy produced this year (the decarbonisation
+    /// instrument input): clean / (clean + fossil).
+    pub fn clean_share(&self) -> f64 {
+        let clean = self.output[Sector::CleanEnergy.index()];
+        let fossil = self.output[Sector::FossilFuel.index()];
+        if clean + fossil <= 0.0 {
+            0.0
+        } else {
+            clean / (clean + fossil)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effort_scales_with_labour_capital_and_access() {
+        let mut e = Economy::default();
+        // Constant-returns in labour at the margin (so a populous society can
+        // feed itself; the diminishing returns live in the resource ceiling).
+        let y1 = e.potential(Sector::Goods, 1.0, 1.0);
+        let y2 = e.potential(Sector::Goods, 2.0, 1.0);
+        assert!((y2 - 2.0 * y1).abs() < 1e-9, "effort is linear in labour");
+        // Resource access scales effort.
+        assert!(e.potential(Sector::Food, 1.0, 0.5) < e.potential(Sector::Food, 1.0, 1.0));
+        // Capital deepening helps with diminishing returns (α < 1).
+        let k_low = e.potential(Sector::Goods, 1.0, 1.0);
+        e.capital[Sector::Goods.index()] = 4.0;
+        let k_hi = e.potential(Sector::Goods, 1.0, 1.0);
+        assert!(k_hi > k_low, "more capital, more effort");
+        assert!(k_hi < 4.0 * k_low, "but capital has diminishing returns (α<1)");
+    }
+
+    #[test]
+    fn learning_by_doing_lowers_the_cost_of_scale() {
+        let mut e = Economy::default();
+        let p0 = e.productivity[Sector::CleanEnergy.index()];
+        assert!(p0 < 0.5, "clean energy must START immature (the transition is earned)");
+        for _ in 0..20 {
+            e.record_output(Sector::CleanEnergy, 5.0);
+        }
+        let p1 = e.productivity[Sector::CleanEnergy.index()];
+        assert!(p1 > p0 * 1.5, "deploying clean energy should make it much cheaper");
+        // Clean learns faster than a conventional sector at equal cumulative
+        // growth — compare growth *factors* (clean starts immature, so its
+        // absolute productivity is lower by design).
+        let mut f = Economy::default();
+        for _ in 0..20 {
+            f.record_output(Sector::Materials, 5.0);
+        }
+        let clean_growth = e.productivity[Sector::CleanEnergy.index()] / CLEAN_INITIAL_PRODUCTIVITY;
+        let mat_growth = f.productivity[Sector::Materials.index()] / 1.0;
+        assert!(
+            clean_growth > mat_growth,
+            "clean energy should have the steeper learning curve: x{clean_growth:.2} vs x{mat_growth:.2}"
+        );
+    }
+
+    #[test]
+    fn prices_track_scarcity_food_is_numeraire() {
+        let mut e = Economy::default();
+        for _ in 0..20 {
+            e.update_price(Sector::Goods, 10.0, 2.0); // chronic shortage
+        }
+        assert!(e.price[Sector::Goods.index()] > 1.5, "scarcity raises price");
+        for _ in 0..40 {
+            e.update_price(Sector::Goods, 2.0, 10.0); // glut
+        }
+        assert!(e.price[Sector::Goods.index()] < 1.0, "a glut lowers price");
+        e.update_price(Sector::Food, 99.0, 1.0);
+        assert_eq!(e.price[Sector::Food.index()], 1.0, "food is the numéraire");
+    }
+
+    #[test]
+    fn capital_depreciates_and_rebuilds() {
+        let mut e = Economy::default();
+        let k0 = e.capital[Sector::Goods.index()];
+        e.invest(Sector::Goods, 0.0);
+        assert!(e.capital[Sector::Goods.index()] < k0, "no investment ⇒ decay");
+        for _ in 0..50 {
+            e.invest(Sector::Goods, 1.0);
+        }
+        assert!(e.capital[Sector::Goods.index()] > k0, "sustained investment grows capital");
+    }
+}
