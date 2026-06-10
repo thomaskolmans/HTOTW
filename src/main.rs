@@ -549,6 +549,8 @@ fn cmd_map(args: &[String]) -> i32 {
     let mut file = None;
     let mut years = 200usize;
     let mut layer = MapLayer::Population;
+    let mut png: Option<String> = None;
+    let mut scale = 12usize;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -560,6 +562,8 @@ fn cmd_map(args: &[String]) -> i32 {
                 match MapLayer::parse(v) { Some(l) => layer = l, None => return ae("layer must be geo|temp|bio|pop") }
                 i += 2;
             }
+            "--png" => { let Some(v) = args.get(i+1) else { return ae("--png needs a path"); }; png = Some(v.clone()); i += 2; }
+            "--scale" => { let Some(v) = args.get(i+1) else { return ae("--scale needs a value"); }; let Ok(n) = v.parse() else { return ae("invalid --scale"); }; scale = n; i += 2; }
             other => return ae(&format!("unknown argument: {other}")),
         }
     }
@@ -573,9 +577,17 @@ fn cmd_map(args: &[String]) -> i32 {
         "world '{}' after {years} years — layer: {:?}\n  pop {}  warming {:.2}K  biodiversity {:.2}\n",
         scenario.name, layer, m.population, m.temp_anomaly, m.biodiversity
     );
-    print!("{}", render_map(&w, layer));
-    println!("\n  (~ ocean; ramp ' .:-=+*#%@' low→high; map is north-up)");
-    0
+    if let Some(path) = png {
+        let bytes = worldsim::render::render_png(&w, layer, scale);
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => { println!("wrote {}x{} px image to {path}", w.planet.nlon*scale, w.planet.nlat*scale); 0 }
+            Err(e) => { eprintln!("failed to write {path}: {e}"); 1 }
+        }
+    } else {
+        print!("{}", render_map(&w, layer));
+        println!("\n  (~ ocean; ramp ' .:-=+*#%@' low→high; map is north-up)");
+        0
+    }
 }
 
 /// `worldsim trace` — run the world and emit the global emergent time-series as

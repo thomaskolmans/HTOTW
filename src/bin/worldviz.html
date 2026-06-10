@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>worldsim — planetary simulator</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #2a323d; --ink: #e6edf3;
+    --muted: #8b949e; --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .grow { flex: 1; }
+  .badge { color: var(--muted); font-size: 12px; }
+  .badge b { color: var(--ink); }
+  main { display: grid; grid-template-columns: 320px 1fr; gap: 0; height: calc(100vh - 52px); }
+  aside {
+    border-right: 1px solid var(--line); overflow-y: auto; padding: 12px 14px;
+    background: var(--panel);
+  }
+  section.view { overflow-y: auto; padding: 14px 16px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+       margin: 18px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  h2:first-child { margin-top: 0; }
+  .ctl { margin: 8px 0; }
+  .ctl label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .ctl label .val { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .ctl input[type=range] { width: 100%; accent-color: var(--accent); }
+  .ctl select, .ctl input[type=number] {
+    width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 6px; font: inherit;
+  }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button {
+    background: var(--accent); color: #04121f; border: 0; border-radius: 6px;
+    padding: 7px 10px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:active { transform: translateY(1px); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  canvas#map { width: 100%; image-rendering: pixelated; background: #05080c; border: 1px solid var(--line); border-radius: 8px; }
+  .layers { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .layers button { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 4px 9px; font-weight: 500; }
+  .layers button.on { background: var(--accent); color: #04121f; border-color: var(--accent); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 8px; margin: 12px 0; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 12px; }
+  .chart { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 4px; }
+  .chart .t { font-size: 12px; color: var(--muted); margin-bottom: 2px; display:flex; justify-content:space-between; }
+  .chart .t b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  canvas.spark { width: 100%; height: 56px; display: block; }
+  .err { color: var(--bad); font-size: 12px; min-height: 16px; margin-top: 4px; }
+  .note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .welfare { font-size: 13px; }
+  .welfare .bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border:1px solid var(--line); margin-top:3px; }
+  .welfare .bar i { display: block; height: 100%; background: linear-gradient(90deg,var(--bad),var(--warn),var(--good)); }
+</style>
+</head>
+<body>
+<header>
+  <h1>worldsim</h1>
+  <span class="sub">a first-principles planetary simulator — inputs left, measured results right</span>
+  <span class="grow"></span>
+  <span class="badge">scenario <b id="scenarioName">—</b></span>
+  <span class="badge">year <b id="year">0</b></span>
+  <span class="badge">pop <b id="popBadge">—</b></span>
+</header>
+<main>
+  <aside>
+    <div class="controls">
+      <button id="play">▶ Play</button>
+      <button id="step" class="ghost">Step</button>
+      <button id="reset" class="ghost">Reset</button>
+    </div>
+    <div class="ctl">
+      <label>speed <span class="val" id="speedVal">5 yr/s</span></label>
+      <input type="range" id="speed" min="1" max="30" value="5">
+    </div>
+
+    <h2>Load an archetype</h2>
+    <div class="ctl">
+      <select id="archetype">
+        <option value="">— choose —</option>
+        <option value="laissez-faire">laissez-faire</option>
+        <option value="social-democracy">social-democracy</option>
+        <option value="eco-technocracy">eco-technocracy</option>
+        <option value="extractive-autocracy">extractive-autocracy</option>
+        <option value="degrowth-commons">degrowth-commons</option>
+      </select>
+    </div>
+    <div class="note">Resets the run with that society's laws.</div>
+
+    <h2>Society — laws &amp; institutions</h2>
+    <div class="note">Applied live; the running world responds.</div>
+    <div class="ctl">
+      <label>property regime</label>
+      <select id="property" data-soc>
+        <option value="open-access">open access</option>
+        <option value="commons-quota">commons quota</option>
+        <option value="private">private</option>
+      </select>
+    </div>
+    <div class="ctl" id="quotaWrap">
+      <label>conservation quota <span class="val" id="conservation-quotaVal"></span></label>
+      <input type="range" id="conservation-quota" data-soc min="0.2" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>income tax rate <span class="val" id="tax-rateVal"></span></label>
+      <input type="range" id="tax-rate" data-soc min="0" max="0.5" step="0.01">
+    </div>
+    <div class="ctl">
+      <label>tax progressivity <span class="val" id="tax-progressivityVal"></span></label>
+      <input type="range" id="tax-progressivity" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>transfer regime</label>
+      <select id="transfer" data-soc>
+        <option value="none">none</option>
+        <option value="floor">means-tested floor</option>
+        <option value="universal-dividend">universal dividend</option>
+      </select>
+    </div>
+    <div class="ctl">
+      <label>education spend <span class="val" id="education-shareVal"></span></label>
+      <input type="range" id="education-share" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>infrastructure spend <span class="val" id="infrastructure-shareVal"></span></label>
+      <input type="range" id="infrastructure-share" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>research spend <span class="val" id="research-shareVal"></span></label>
+      <input type="range" id="research-share" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>enforcement spend <span class="val" id="enforcement-shareVal"></span></label>
+      <input type="range" id="enforcement-share" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>carbon price <span class="val" id="carbon-priceVal"></span></label>
+      <input type="range" id="carbon-price" data-soc min="0" max="15" step="0.5">
+    </div>
+    <div class="ctl">
+      <label>migration openness <span class="val" id="migration-opennessVal"></span></label>
+      <input type="range" id="migration-openness" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>trade openness <span class="val" id="trade-opennessVal"></span></label>
+      <input type="range" id="trade-openness" data-soc min="0" max="1" step="0.05">
+    </div>
+    <div class="ctl">
+      <label>governance</label>
+      <select id="governance" data-soc>
+        <option value="fixed">fixed</option>
+        <option value="majority">majority referenda</option>
+        <option value="wealth-weighted">wealth-weighted</option>
+      </select>
+    </div>
+    <div class="err" id="socErr"></div>
+
+    <h2>Planet — primitives (resets run)</h2>
+    <div class="ctl">
+      <label>population <span class="val" id="populationVal"></span></label>
+      <input type="range" id="population" data-world min="500" max="6000" step="250">
+    </div>
+    <div class="ctl">
+      <label>polities <span class="val" id="politiesVal"></span></label>
+      <input type="range" id="polities" data-world min="1" max="9" step="1">
+    </div>
+    <div class="ctl">
+      <label>fossil endowment <span class="val" id="fossil-endowmentVal"></span></label>
+      <input type="range" id="fossil-endowment" data-world min="5" max="200" step="5">
+    </div>
+    <div class="ctl">
+      <label>labour yield <span class="val" id="base-yieldVal"></span></label>
+      <input type="range" id="base-yield" data-world min="2" max="12" step="0.5">
+    </div>
+    <div class="ctl">
+      <label>birth ceiling <span class="val" id="birth-ceilingVal"></span></label>
+      <input type="range" id="birth-ceiling" data-world min="0.15" max="0.5" step="0.01">
+    </div>
+    <div class="ctl">
+      <label>seed <span class="val" id="seedVal"></span></label>
+      <input type="number" id="seed" data-world min="0" step="1">
+    </div>
+    <div class="err" id="worldErr"></div>
+    <div class="note">Every number on the right is <b>measured</b> from the simulated world — never set. The inputs here are physical/biological primitives and institutional mechanisms only.</div>
+  </aside>
+
+  <section class="view">
+    <div class="layers" id="layers">
+      <button data-layer="biome" class="on">biome</button>
+      <button data-layer="temp">temperature</button>
+      <button data-layer="bio">biomass</button>
+      <button data-layer="pop">population</button>
+      <button data-layer="polity">polities</button>
+    </div>
+    <canvas id="map" width="72" height="36"></canvas>
+
+    <div class="welfare">
+      <div class="t" style="display:flex;justify-content:space-between">
+        <span>measured welfare <span class="note">(geomean: well-being × equity × sustainability × survival)</span></span>
+        <b id="welfareNum">—</b>
+      </div>
+      <div class="bar"><i id="welfareBar" style="width:0%"></i></div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <h2>Emergent history</h2>
+    <div class="charts" id="charts"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = null, playing = false, layer = 'biome', timer = null;
+
+// ---- networking -------------------------------------------------------
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const txt = await r.text();
+  let data; try { data = JSON.parse(txt); } catch { data = {error: txt}; }
+  return {ok: r.ok, data};
+}
+async function refresh(d) { state = d; render(); }
+
+async function step(years) {
+  const {data} = await api('/api/step?years=' + years, {method:'POST'});
+  refresh(data);
+}
+async function reset() { const {data} = await api('/api/reset', {method:'POST'}); refresh(data); }
+
+// ---- map rendering ----------------------------------------------------
+// Palettes per layer; 'biome' composites land/elevation/ice for a natural look.
+function colorFor(i) {
+  const s = state, land = s.land[i] === '1';
+  if (layer === 'biome') {
+    if (!land) return [16, 42, 74];                 // ocean
+    const t = (s.temp.charCodeAt(i)-48)/9;          // temperature 0..1
+    const e = (s.elev.charCodeAt(i)-48)/9;          // elevation 0..1
+    const b = (s.bio.charCodeAt(i)-48)/9;           // biomass 0..1
+    if (t < 0.12) return [232, 240, 247];           // ice/snow
+    if (e > 0.55) return [120, 110, 96];            // mountains
+    // green (lush) → tan (arid) by biomass
+    const g = [Math.round(70 + (1-b)*120), Math.round(110 + b*60), Math.round(60 + (1-b)*40)];
+    return g;
+  }
+  if (!land) return [16, 42, 74];
+  let v;
+  if (layer === 'temp') { v = (s.temp.charCodeAt(i)-48)/9; return ramp(v, [60,90,170],[230,90,60]); }
+  if (layer === 'bio')  { v = (s.bio.charCodeAt(i)-48)/9;  return ramp(v, [40,40,30],[80,200,90]); }
+  if (layer === 'pop')  { const c = s.pop.charCodeAt(i)-48; if (c===0) return [30,38,48]; v=c/9; return ramp(v,[40,30,60],[250,230,120]); }
+  if (layer === 'polity'){ const ch=s.polity[i]; if(ch==='~')return[16,42,74]; const k=ch.charCodeAt(0)-48; return PAL[k%PAL.length]; }
+  return [80,80,80];
+}
+const PAL = [[230,100,90],[90,170,230],[120,200,120],[230,190,90],[190,130,220],[90,210,200],[230,150,90],[160,160,230],[200,200,120],[150,210,160]];
+function ramp(v,a,b){ v=Math.max(0,Math.min(1,v)); return [0,1,2].map(k=>Math.round(a[k]+(b[k]-a[k])*v)); }
+
+function drawMap() {
+  if (!state) return;
+  const cv = $('map'), W = state.nlon, H = state.nlat;
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  for (let i=0;i<W*H;i++){ const c=colorFor(i); img.data[i*4]=c[0]; img.data[i*4+1]=c[1]; img.data[i*4+2]=c[2]; img.data[i*4+3]=255; }
+  ctx.putImageData(img, 0, 0);
+}
+
+// ---- charts -----------------------------------------------------------
+const SERIES = [
+  {idx:1,  name:'population',   fmt:v=>fmtInt(v)},
+  {idx:11, name:'welfare',      fmt:v=>v.toFixed(3)},
+  {idx:8,  name:'warming K',    fmt:v=>v.toFixed(2)},
+  {idx:10, name:'biodiversity', fmt:v=>v.toFixed(2)},
+  {idx:3,  name:'wealth gini',  fmt:v=>v.toFixed(2)},
+  {idx:5,  name:'wellbeing',    fmt:v=>v.toFixed(2)},
+  {idx:9,  name:'clean share',  fmt:v=>v.toFixed(2)},
+  {idx:2,  name:'gdp/capita',   fmt:v=>v.toFixed(2)},
+  {idx:6,  name:'deprivation',  fmt:v=>v.toFixed(2)},
+  {idx:7,  name:'co2 ppm',      fmt:v=>fmtInt(v)},
+  {idx:4,  name:'life exp.',    fmt:v=>v.toFixed(0)},
+];
+function buildCharts() {
+  const root = $('charts'); root.innerHTML='';
+  for (const s of SERIES) {
+    const d = document.createElement('div'); d.className='chart';
+    d.innerHTML = `<div class="t"><span>${s.name}</span><b id="cv_${s.idx}">—</b></div><canvas class="spark" id="ck_${s.idx}"></canvas>`;
+    root.appendChild(d);
+  }
+}
+function drawCharts() {
+  const h = state.history;
+  for (const s of SERIES) {
+    const cv = $('ck_'+s.idx); const w = cv.clientWidth||260, hh=56;
+    cv.width=w; cv.height=hh; const ctx=cv.getContext('2d');
+    ctx.clearRect(0,0,w,hh);
+    const vals = h.map(r=>r[s.idx]);
+    const last = vals[vals.length-1];
+    $('cv_'+s.idx).textContent = last===undefined?'—':s.fmt(last);
+    if (vals.length<2) continue;
+    let lo=Math.min(...vals), hi=Math.max(...vals); if(hi-lo<1e-9){hi=lo+1;}
+    ctx.strokeStyle='#58a6ff'; ctx.lineWidth=1.5; ctx.beginPath();
+    vals.forEach((v,k)=>{ const x=k/(vals.length-1)*w; const y=hh-4-((v-lo)/(hi-lo))*(hh-8); k?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.stroke();
+    ctx.fillStyle='rgba(88,166,255,0.12)'; ctx.lineTo(w,hh); ctx.lineTo(0,hh); ctx.closePath(); ctx.fill();
+  }
+}
+
+function fmtInt(v){ return v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':Math.round(v).toString(); }
+
+// ---- stat cards -------------------------------------------------------
+function drawStats() {
+  const h = state.history, m = h[h.length-1];
+  const cards = [
+    ['population', fmtInt(m[1])],
+    ['welfare', m[11].toFixed(3)],
+    ['warming', m[8].toFixed(2)+' K'],
+    ['CO₂', Math.round(m[7])+' ppm'],
+    ['wealth gini', m[3].toFixed(2)],
+    ['well-being', m[5].toFixed(2)],
+    ['biodiversity', m[10].toFixed(2)],
+    ['clean energy', Math.round(m[9]*100)+'%'],
+    ['deprivation', Math.round(m[6]*100)+'%'],
+    ['life exp.', m[4].toFixed(0)+' yr'],
+    ['pandemics', state.pandemics],
+    ['wars', state.wars+' ('+fmtInt(state.war_deaths)+' dead)'],
+  ];
+  $('stats').innerHTML = cards.map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  const wf = m[11];
+  $('welfareNum').textContent = wf.toFixed(3);
+  $('welfareBar').style.width = Math.round(wf*100)+'%';
+}
+
+// ---- panel sync -------------------------------------------------------
+function syncPanel() {
+  const soc = state.society, wcfg = state.world;
+  for (const el of document.querySelectorAll('[data-soc]')) {
+    const key = el.id; if (soc[key]===undefined) continue;
+    el.value = soc[key];
+    const lab = $(key+'Val'); if (lab) lab.textContent = typeof soc[key]==='number'?soc[key].toFixed(2):soc[key];
+  }
+  for (const el of document.querySelectorAll('[data-world]')) {
+    const key = el.id; if (wcfg[key]===undefined) continue;
+    el.value = wcfg[key];
+    const lab = $(key+'Val'); if (lab) lab.textContent = (key==='seed'||key==='population'||key==='polities')?wcfg[key]:(+wcfg[key]).toFixed(2);
+  }
+  $('quotaWrap').style.display = soc.property==='commons-quota' ? '' : 'none';
+}
+
+// ---- render -----------------------------------------------------------
+function render() {
+  if (!state) return;
+  $('scenarioName').textContent = state.name;
+  $('year').textContent = state.year;
+  const m = state.history[state.history.length-1];
+  $('popBadge').textContent = fmtInt(m[1]);
+  drawMap(); drawStats(); drawCharts(); syncPanel();
+}
+
+// ---- input wiring -----------------------------------------------------
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; }
+
+const pushSociety = debounce(async () => {
+  const lines = [];
+  for (const el of document.querySelectorAll('[data-soc]')) lines.push(el.id+'='+el.value);
+  const {ok,data} = await api('/api/society', {method:'POST', body: lines.join('\n')});
+  $('socErr').textContent = ok ? '' : (data.error||'error');
+  if (ok) refresh(data);
+}, 120);
+
+const pushWorld = debounce(async () => {
+  const lines = [];
+  for (const el of document.querySelectorAll('[data-world]')) lines.push(el.id+'='+el.value);
+  const {ok,data} = await api('/api/world', {method:'POST', body: lines.join('\n')});
+  $('worldErr').textContent = ok ? '' : (data.error||'error');
+  if (ok) refresh(data);
+}, 200);
+
+for (const el of document.querySelectorAll('[data-soc]')) {
+  el.addEventListener('input', () => { const l=$(el.id+'Val'); if(l && el.type==='range') l.textContent=(+el.value).toFixed(2); pushSociety(); });
+}
+for (const el of document.querySelectorAll('[data-world]')) {
+  el.addEventListener('input', () => { const l=$(el.id+'Val'); if(l && el.type==='range') l.textContent=(el.id==='population'||el.id==='polities')?el.value:(+el.value).toFixed(2); });
+  el.addEventListener('change', pushWorld);
+}
+
+$('archetype').addEventListener('change', async e => {
+  if (!e.target.value) return;
+  const {data} = await api('/api/archetype', {method:'POST', body: e.target.value});
+  refresh(data); e.target.value='';
+});
+
+$('layers').addEventListener('click', e => {
+  const b = e.target.closest('button'); if(!b) return;
+  layer = b.dataset.layer;
+  for (const x of $('layers').children) x.classList.toggle('on', x===b);
+  drawMap();
+});
+
+function setPlaying(on) {
+  playing = on; $('play').textContent = on ? '⏸ Pause' : '▶ Play';
+  if (timer) { clearInterval(timer); timer=null; }
+  if (on) {
+    const rate = +$('speed').value;
+    timer = setInterval(() => step(1), 1000/rate);
+  }
+}
+$('play').addEventListener('click', () => setPlaying(!playing));
+$('step').addEventListener('click', () => { setPlaying(false); step(1); });
+$('reset').addEventListener('click', () => { setPlaying(false); reset(); });
+$('speed').addEventListener('input', () => { $('speedVal').textContent=$('speed').value+' yr/s'; if(playing) setPlaying(true); });
+
+// ---- boot -------------------------------------------------------------
+buildCharts();
+api('/api/state').then(r => refresh(r.data));
+</script>
+</body>
+</html>

@@ -114,6 +114,137 @@ pub fn render_map(world: &World, layer: MapLayer) -> String {
     out
 }
 
+/// Render the world to a **PNG** image (dependency-free, universally
+/// viewable) at `scale` pixels per cell, painting the chosen layer with a
+/// natural palette. Read-only.
+pub fn render_png(world: &World, layer: MapLayer, scale: usize) -> Vec<u8> {
+    let p = &world.planet;
+    let (nlon, nlat) = (p.nlon, p.nlat);
+    let scale = scale.max(1);
+    let (w, h) = (nlon * scale, nlat * scale);
+
+    // Per-cell population for the population layer.
+    let mut pop = vec![0u32; p.cells()];
+    if layer == MapLayer::Population {
+        for i in 0..world.people.len() {
+            if world.people.alive[i] {
+                pop[world.people.cell[i]] += 1;
+            }
+        }
+    }
+    let pop_max = pop.iter().copied().max().unwrap_or(1).max(1) as f64;
+    let (mut tmin, mut tmax) = (f64::INFINITY, f64::NEG_INFINITY);
+    for i in 0..p.cells() {
+        tmin = tmin.min(p.temp[i]);
+        tmax = tmax.max(p.temp[i]);
+    }
+    let trange = (tmax - tmin).max(1e-6);
+    let ramp = |v: f64, a: [u8; 3], b: [u8; 3]| -> [u8; 3] {
+        let v = v.clamp(0.0, 1.0);
+        [0, 1, 2].map(|k| (a[k] as f64 + (b[k] as f64 - a[k] as f64) * v) as u8)
+    };
+    let color = |i: usize| -> [u8; 3] {
+        let land = p.is_land[i];
+        let ocean = [16u8, 42, 74];
+        match layer {
+            MapLayer::Geography => {
+                if !land { ocean }
+                else if p.temp[i] < 263.0 { [232, 240, 247] }
+                else if p.elevation[i] > 1.5 { [120, 110, 96] }
+                else {
+                    let b = if p.biomass_k0[i] > 0.0 { p.biomass[i] / p.biomass_k0[i] } else { 0.0 };
+                    [(70.0 + (1.0 - b) * 120.0) as u8, (110.0 + b * 60.0) as u8, (60.0 + (1.0 - b) * 40.0) as u8]
+                }
+            }
+            MapLayer::Temperature => if !land { ocean } else { ramp((p.temp[i] - tmin) / trange, [60, 90, 170], [230, 90, 60]) },
+            MapLayer::Biomass => if !land { ocean } else {
+                let b = if p.biomass_k0[i] > 0.0 { p.biomass[i] / p.biomass_k0[i] } else { 0.0 };
+                ramp(b, [40, 40, 30], [80, 200, 90])
+            },
+            MapLayer::Population => {
+                if !land { ocean }
+                else if pop[i] == 0 { [30, 38, 48] }
+                else { ramp(pop[i] as f64 / pop_max, [40, 30, 60], [250, 230, 120]) }
+            }
+        }
+    };
+
+    // Build the raw RGB raster (top-down), then PNG-encode it.
+    let mut raw = Vec::with_capacity(h * (1 + w * 3));
+    for py in 0..h {
+        let cy = py / scale;
+        raw.push(0u8); // filter type 0 (none) per scanline
+        for px in 0..w {
+            let cx = px / scale;
+            let c = color(cy * nlon + cx);
+            raw.extend_from_slice(&c);
+        }
+    }
+    encode_png(w, h, &raw)
+}
+
+/// CRC-32 (IEEE) over a byte slice.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Adler-32 over a byte slice (the zlib trailer).
+fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b): (u32, u32) = (1, 0);
+    for &x in data {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+/// Minimal PNG encoder: 8-bit RGB, a zlib stream of **stored** (uncompressed)
+/// DEFLATE blocks — no compression library needed, and the files stay modest
+/// at map resolutions. Produces a standard, universally-viewable PNG.
+fn encode_png(w: usize, h: usize, raw_rgb_with_filters: &[u8]) -> Vec<u8> {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    // IHDR.
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&(w as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(h as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit, truecolor RGB
+    chunk(&mut out, b"IHDR", &ihdr);
+    // IDAT: zlib(stored deflate).
+    let mut zlib = vec![0x78, 0x01]; // CMF/FLG
+    let data = raw_rgb_with_filters;
+    let mut i = 0;
+    while i < data.len() {
+        let n = (data.len() - i).min(0xFFFF);
+        let last = if i + n >= data.len() { 1u8 } else { 0u8 };
+        zlib.push(last); // BFINAL, BTYPE=00 (stored)
+        zlib.extend_from_slice(&(n as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(n as u16)).to_le_bytes());
+        zlib.extend_from_slice(&data[i..i + n]);
+        i += n;
+    }
+    zlib.extend_from_slice(&adler32(data).to_be_bytes());
+    chunk(&mut out, b"IDAT", &zlib);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
 /// A single sparkline of a series in `[min,max]`, drawn with block glyphs.
 pub fn sparkline(series: &[f64]) -> String {
     const BARS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -209,6 +340,22 @@ mod tests {
         assert!(map.chars().any(|c| "▁:-=+*#%@".contains(c) || c.is_alphanumeric() || "=+*#%@".contains(c) || c == '@' ));
         // Determinism of the render.
         assert_eq!(render_map(&w, MapLayer::Population), map);
+    }
+
+    #[test]
+    fn png_export_has_a_valid_header() {
+        let mut w = small();
+        for _ in 0..20 { w.step(); }
+        let png = render_png(&w, MapLayer::Biomass, 4);
+        assert_eq!(&png[0..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A], "PNG signature");
+        // IHDR length (13) then "IHDR", then width/height big-endian.
+        assert_eq!(&png[12..16], b"IHDR");
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert_eq!(width as usize, w.planet.nlon * 4);
+        assert_eq!(height as usize, w.planet.nlat * 4);
+        // Ends with an IEND chunk.
+        assert_eq!(&png[png.len()-8..png.len()-4], b"IEND");
     }
 
     #[test]

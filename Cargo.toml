@@ -13,6 +13,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "worldsim"
 path = "src/main.rs"
+[[bin]]
+name = "worldviz"
+path = "src/bin/worldviz.rs"
 
 # Dependency-free on purpose: reproducibility, fast builds, no hidden models.
 [dependencies]

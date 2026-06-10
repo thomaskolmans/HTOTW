@@ -80,6 +80,30 @@ cargo run --release -- map --layer biomass --archetype degrowth-commons
 cargo run --release -- list
 ```
 
+### Interactive visualiser (in your browser)
+
+```sh
+cargo run --release --bin worldviz        # then open http://127.0.0.1:8088
+```
+
+`worldviz` runs the engine **natively** and serves a self-contained,
+dependency-free HTML/Canvas page (a tiny std-only HTTP server, nothing to
+install). The left panel exposes **every input** — the society's laws and
+institutions (property regime, taxes, transfers, public spending, carbon price,
+trade/border openness, governance) and the planet's primitives (population,
+polities, endowments, labour yield, psychology) — and the right shows the
+**measured results**: the planet rendered live (geography / temperature /
+biomass / population / polities layers), headline stat cards, the welfare bar,
+and live charts of every emergent series. Press play and watch a society's
+history unfold; drag a law mid-run and watch the world respond. Every number
+shown is measured, never set.
+
+You can also export a map straight to an image without the browser:
+
+```sh
+cargo run --release -- map --archetype laissez-faire --layer biomass --years 250 --png world.png
+```
+
 ### Calibration — simulate *to* reality
 
 `worldsim calibrate` is the deepest answer to "make no assumptions": rather than
